@@ -31,6 +31,10 @@ hooks surface before installing or loading it:
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
 export TYPESAFE_API_KEY="<your TypeSafe key>"
 
+# Or for Cloudflare Workers AI Clef:
+# export CLOUDFLARE_API_TOKEN="<your Cloudflare API token>"
+# export CLOUDFLARE_ACCOUNT_ID="<your Cloudflare account ID>"
+
 claude plugin marketplace add tamaratran/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
@@ -56,9 +60,13 @@ The plugin declares these `userConfig` values in
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+| `accountId` | `CLOUDFLARE_ACCOUNT_ID` |
+| `baseUrl` | (empty, uses provider default) |
 
-The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
-through `TYPESAFE_API_KEY`. The environment variable is the recommended
+The API key or token can be supplied as the sensitive `apiKey` plugin option or
+through environment variables (`TYPESAFE_API_KEY` for TypeSafe, or `CLOUDFLARE_API_TOKEN` /
+`CLOUDFLARE_AUTH_TOKEN` for Cloudflare Workers AI). For Clef, set `model` to `@cf/cloudflare/clef`
+(or `clef`) and ensure `CLOUDFLARE_ACCOUNT_ID` is set. Environment variables are the recommended
 development setup.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and

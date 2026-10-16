@@ -55,12 +55,23 @@ describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({
+        apiKey: 'k',
+        accountId: 'acc-1',
+        baseUrl: 'https://gateway.example.com',
+        keepThreshold: 0.3,
+        maxStateTokens: 1000,
+        model: '@cf/cloudflare/clef',
+        goal: 'g',
+        compactAtPercent: 'no',
+      }),
     ).toEqual({
       apiKey: 'k',
+      accountId: 'acc-1',
+      baseUrl: 'https://gateway.example.com',
       keepThreshold: 0.3,
       maxStateTokens: 1000,
-      model: 'jev-x',
+      model: '@cf/cloudflare/clef',
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
@@ -145,5 +156,54 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+
+    const cfConfig = resolveHookConfig({
+      preserveRecentMessages: 1,
+      model: '@cf/cloudflare/clef',
+      accountId: 'acc-1',
+    });
+    await expect(compactSession(transcript(), cfConfig, jevFetch(() => 0))).rejects.toThrow(
+      /CLOUDFLARE_API_TOKEN/,
+    );
+  });
+
+  it('runs compactSession configured with Cloudflare Clef', async () => {
+    const requestedUrls: string[] = [];
+    const bodies: string[] = [];
+    const config = {
+      ...resolveHookConfig({ preserveRecentMessages: 1 }),
+      apiKey: 'cf-token',
+      accountId: 'test-acc',
+      model: '@cf/cloudflare/clef',
+    };
+    const { result: output } = await compactSession(
+      transcript(),
+      config,
+      async (url, init) => {
+        requestedUrls.push(url);
+        bodies.push(init?.body ?? '');
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({
+            success: true,
+            result: {
+              model: 'clef',
+              answers: {
+                call_t1: { type: 'noul', noul: 0.1 },
+                result_t1: { type: 'noul', noul: 0.1 },
+                call_t2: { type: 'noul', noul: 0.9 },
+                result_t2: { type: 'noul', noul: 0.9 },
+              },
+            },
+          }),
+        };
+      },
+    );
+    expect(requestedUrls[0]).toBe(
+      'https://api.cloudflare.com/client/v4/accounts/test-acc/ai/run/@cf/cloudflare/clef',
+    );
+    expect(JSON.parse(bodies[0]!).model).toBe('clef');
+    expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
   });
 });

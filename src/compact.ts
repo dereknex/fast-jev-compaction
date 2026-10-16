@@ -66,6 +66,9 @@ export function questionsFor(call: ToolCall): JevQuestions {
   };
 }
 
+export const MAX_QUESTIONS_PER_REQUEST = 64;
+export const MAX_CALLS_PER_BATCH = Math.floor(MAX_QUESTIONS_PER_REQUEST / 2); // 32
+
 /**
  * Splits the candidate calls into batches whose questions, together with the
  * (always complete) state, fit one request.
@@ -81,7 +84,10 @@ export function batchCalls(
   let currentTokens = 0;
   for (const call of calls) {
     const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
-    if (current.length > 0 && currentTokens + tokens > budget) {
+    if (
+      current.length > 0 &&
+      (current.length >= MAX_CALLS_PER_BATCH || currentTokens + tokens > budget)
+    ) {
       batches.push(current);
       current = [];
       currentTokens = 0;

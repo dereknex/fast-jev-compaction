@@ -6,9 +6,19 @@
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "API Key / Token",
+      "description": "API key or token: TYPESAFE_API_KEY for TypeSafe, or CLOUDFLARE_API_TOKEN / CLOUDFLARE_AUTH_TOKEN for Cloudflare.",
       "sensitive": true
+    },
+    "accountId": {
+      "type": "string",
+      "title": "Cloudflare Account ID",
+      "description": "Cloudflare account ID for Workers AI. Leave unset to use CLOUDFLARE_ACCOUNT_ID."
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Base URL",
+      "description": "Custom API endpoint (e.g. Cloudflare AI Gateway URL or custom System One endpoint)."
     },
     "keepThreshold": {
       "type": "number",
@@ -54,8 +64,8 @@
     },
     "model": {
       "type": "string",
-      "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
+      "title": "Model",
+      "description": "Decision model selector: 'jev-latest' (TypeSafe), '@cf/cloudflare/clef' or 'clef' (Cloudflare Workers AI), '@cf/cloudflare/clef-flash'.",
       "default": "jev-latest"
     }
   }

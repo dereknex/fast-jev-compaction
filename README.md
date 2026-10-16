@@ -61,6 +61,9 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 ```sh
 npm install fast-jev-compaction
 export TYPESAFE_API_KEY=...
+# Or for Cloudflare Workers AI Clef:
+# export CLOUDFLARE_API_TOKEN=...
+# export CLOUDFLARE_ACCOUNT_ID=...
 ```
 
 ```ts
@@ -77,7 +80,17 @@ const transcript: Message[] = [
   // …
 ];
 
+// Using TypeSafe Jev (default):
 const result = await compactMessages(transcript, { preserveRecentMessages: 4 });
+
+// Or using Cloudflare Workers AI Clef (https://developers.cloudflare.com/workers-ai/models/clef/):
+// const result = await compactMessages(transcript, {
+//   model: '@cf/cloudflare/clef', // or 'clef', or 'clef-flash'
+//   accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+//   apiKey: process.env.CLOUDFLARE_API_TOKEN,
+//   preserveRecentMessages: 4,
+// });
+
 console.log(result.messages, result.decisions, result.stats);
 if (reductionRatio(result) < 0.25) {
   // not worth it: keep the original transcript, or summarize instead
@@ -93,16 +106,18 @@ method) and call `compact(messages, asker, options)`; `buildJevRequest` and
 The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `decideCall`, `applyDecisions`) are exported too.
 
-`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
-put it in a source file.
+`apiKey` defaults to `process.env.TYPESAFE_API_KEY`, or `process.env.CLOUDFLARE_API_TOKEN` /
+`CLOUDFLARE_AUTH_TOKEN` when a Cloudflare model or account ID is configured. Never commit the
+key or put it in a source file.
 
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
+| `apiKey` | `TYPESAFE_API_KEY` or `CLOUDFLARE_API_TOKEN` | API key / token (`compactMessages`/`JevClient`) |
+| `model` | `jev-latest` | Decision model: `jev-latest` (TypeSafe), `@cf/cloudflare/clef` / `clef` (Cloudflare Workers AI), `@cf/cloudflare/clef-flash` / `clef-flash` |
+| `accountId` | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for Workers AI |
+| `baseUrl` | System One or Cloudflare endpoint | Custom endpoint (e.g. Cloudflare AI Gateway URL) |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |

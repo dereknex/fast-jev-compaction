@@ -3,13 +3,18 @@ import {
   applyDecisions,
   batchCalls,
   buildJevRequest,
+  CLOUDFLARE_CLEF_FLASH_MODEL,
+  CLOUDFLARE_CLEF_MODEL,
   collectToolCalls,
   compact,
   compactMessages,
   decideCall,
   estimateTokens,
   fitState,
+  isCloudflareModel,
   JevClient,
+  MAX_CALLS_PER_BATCH,
+  normalizeCloudflareModel,
   parseJevResponse,
   reductionRatio,
   resolveOptions,
@@ -429,5 +434,197 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+
+  describe('Cloudflare Workers AI Clef', () => {
+    it('detects and normalizes Clef models and endpoints', () => {
+      expect(isCloudflareModel('@cf/cloudflare/clef')).toBe(true);
+      expect(isCloudflareModel('clef')).toBe(true);
+      expect(isCloudflareModel('https://developers.cloudflare.com/workers-ai/models/clef/')).toBe(
+        true,
+      );
+      expect(isCloudflareModel('@cf/cloudflare/clef-flash')).toBe(true);
+      expect(isCloudflareModel('clef-flash')).toBe(true);
+      expect(
+        isCloudflareModel('https://developers.cloudflare.com/workers-ai/models/clef-flash/'),
+      ).toBe(true);
+      expect(isCloudflareModel(undefined, 'https://api.cloudflare.com/client/v4/accounts/1/ai/run/@cf/cloudflare/clef')).toBe(
+        true,
+      );
+      expect(isCloudflareModel('jev-latest')).toBe(false);
+      expect(isCloudflareModel(undefined, 'https://api.typesafe.ai/v1/systemone')).toBe(false);
+
+      expect(normalizeCloudflareModel('clef')).toEqual({
+        urlModel: CLOUDFLARE_CLEF_MODEL,
+        bodyModel: 'clef',
+      });
+      expect(normalizeCloudflareModel('@cf/cloudflare/clef')).toEqual({
+        urlModel: CLOUDFLARE_CLEF_MODEL,
+        bodyModel: 'clef',
+      });
+      expect(
+        normalizeCloudflareModel('https://developers.cloudflare.com/workers-ai/models/clef/'),
+      ).toEqual({
+        urlModel: CLOUDFLARE_CLEF_MODEL,
+        bodyModel: 'clef',
+      });
+      expect(normalizeCloudflareModel('clef-flash')).toEqual({
+        urlModel: CLOUDFLARE_CLEF_FLASH_MODEL,
+        bodyModel: 'clef-flash',
+      });
+      expect(normalizeCloudflareModel('@cf/cloudflare/clef-flash')).toEqual({
+        urlModel: CLOUDFLARE_CLEF_FLASH_MODEL,
+        bodyModel: 'clef-flash',
+      });
+    });
+
+    it('builds a Cloudflare Workers AI Clef request', () => {
+      const request = buildJevRequest(
+        { apiKey: 'cf-token', model: '@cf/cloudflare/clef', accountId: 'acc-123' },
+        { a: 1 },
+        { q: { type: 'noul', instructions: 'x' } },
+      );
+      expect(request.url).toBe(
+        'https://api.cloudflare.com/client/v4/accounts/acc-123/ai/run/@cf/cloudflare/clef',
+      );
+      expect(request.headers.authorization).toBe('Bearer cf-token');
+      expect(JSON.parse(request.body)).toEqual({
+        model: 'clef',
+        state: { a: 1 },
+        questions: { q: { type: 'noul', instructions: 'x' } },
+      });
+    });
+
+    it('builds a Clef request from documentation URL', () => {
+      const request = buildJevRequest(
+        {
+          apiKey: 'cf-token',
+          model: 'https://developers.cloudflare.com/workers-ai/models/clef/',
+          accountId: 'acc-456',
+        },
+        'state',
+        { q: { type: 'noul', instructions: 'x' } },
+      );
+      expect(request.url).toBe(
+        'https://api.cloudflare.com/client/v4/accounts/acc-456/ai/run/@cf/cloudflare/clef',
+      );
+      expect(JSON.parse(request.body).model).toBe('clef');
+    });
+
+    it('supports clef-flash variant', () => {
+      const request = buildJevRequest(
+        { apiKey: 'cf-token', model: 'clef-flash', accountId: 'acc-123' },
+        'state',
+        { q: { type: 'noul', instructions: 'x' } },
+      );
+      expect(request.url).toBe(
+        'https://api.cloudflare.com/client/v4/accounts/acc-123/ai/run/@cf/cloudflare/clef-flash',
+      );
+      expect(JSON.parse(request.body).model).toBe('clef-flash');
+    });
+
+    it('supports custom baseUrl for Cloudflare AI Gateway', () => {
+      const gatewayUrl =
+        'https://gateway.ai.cloudflare.com/v1/acc-123/my-gw/workers-ai/@cf/cloudflare/clef';
+      const request = buildJevRequest(
+        { apiKey: 'cf-token', baseUrl: gatewayUrl },
+        'state',
+        { q: { type: 'noul', instructions: 'x' } },
+      );
+      expect(request.url).toBe(gatewayUrl);
+      expect(JSON.parse(request.body).model).toBe('clef');
+    });
+
+    it('throws when accountId is missing for Cloudflare model', () => {
+      expect(() =>
+        buildJevRequest(
+          { apiKey: 'cf-token', model: '@cf/cloudflare/clef' },
+          'state',
+          { q: { type: 'noul', instructions: 'x' } },
+        ),
+      ).toThrow(/Cloudflare accountId is required/);
+    });
+
+    it('parses successful Cloudflare envelope', () => {
+      const cfResponse = {
+        success: true,
+        errors: [],
+        messages: [],
+        result: {
+          model: 'clef',
+          answers: {
+            urgent: { type: 'noul', noul: 0.85 },
+          },
+          usage: { input_tokens: 120, output_tokens: 0 },
+        },
+      };
+      const parsed = parseJevResponse(200, true, JSON.stringify(cfResponse));
+      expect(parsed).toEqual(cfResponse.result);
+      expect(parsed.answers.urgent).toEqual({ type: 'noul', noul: 0.85 });
+    });
+
+    it('parses Cloudflare error envelope', () => {
+      const cfError = {
+        success: false,
+        errors: [{ code: 10000, message: 'Authentication error' }],
+        messages: [],
+        result: null,
+      };
+      expect(() => parseJevResponse(200, true, JSON.stringify(cfError))).toThrow(
+        /Authentication error/,
+      );
+      expect(() => parseJevResponse(403, false, JSON.stringify(cfError))).toThrow(
+        /Authentication error/,
+      );
+    });
+
+    it('runs JevClient configured for Clef and throws with CLOUDFLARE_API_TOKEN on missing key', async () => {
+      const client = new JevClient({
+        model: '@cf/cloudflare/clef',
+        accountId: 'acc-789',
+        apiKey: 'cf-test-token',
+        fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+          expect(String(url)).toBe(
+            'https://api.cloudflare.com/client/v4/accounts/acc-789/ai/run/@cf/cloudflare/clef',
+          );
+          return new Response(
+            JSON.stringify({
+              success: true,
+              result: {
+                model: 'clef',
+                answers: { urgent: { type: 'noul', noul: 0.95 } },
+              },
+            }),
+            { status: 200 },
+          );
+        }) as typeof fetch,
+      });
+
+      const res = await client.ask('state', { urgent: { type: 'noul', instructions: 'urgent?' } });
+      expect(res.answers.urgent).toEqual({ type: 'noul', noul: 0.95 });
+
+      const keylessCf = new JevClient({ model: 'clef', accountId: 'acc-1', apiKey: '' });
+      await expect(keylessCf.ask('s', {})).rejects.toThrow(/CLOUDFLARE_API_TOKEN/);
+    });
+
+    it('enforces maximum 32 calls per batch for the 64 questions limit', () => {
+      const calls: ToolCall[] = Array.from({ length: 70 }, (_, i) => ({
+        id: `t${i + 1}`,
+        tool_use_id: `call_${i + 1}`,
+        tool: 'Read',
+        input: { path: `file_${i + 1}.ts` },
+        callIndex: i * 2,
+        resultIndex: i * 2 + 1,
+        resultChars: 100,
+        isError: false,
+        pinned: false,
+      }));
+      // Large budget so token size is not the limiting factor
+      const batches = batchCalls(calls, 100, { maxRequestTokens: 100_000 });
+      expect(batches.length).toBe(3); // 32 + 32 + 6
+      expect(batches[0]).toHaveLength(MAX_CALLS_PER_BATCH);
+      expect(batches[1]).toHaveLength(MAX_CALLS_PER_BATCH);
+      expect(batches[2]).toHaveLength(6);
+    });
   });
 });
