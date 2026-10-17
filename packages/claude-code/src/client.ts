@@ -45,7 +45,7 @@ export class JevClient implements JevAsker {
            ''));
   }
 
-  async ask(state: JevState, questions: JevQuestions): Promise<JevResponse> {
+  async ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse> {
     if (!this.apiKey) {
       const isCf = isCloudflareModel(this.model, this.baseUrl) || Boolean(this.accountId);
       throw new Error(
@@ -68,6 +68,7 @@ export class JevClient implements JevAsker {
       method: request.method,
       headers: request.headers,
       body: request.body,
+      signal,
     });
     return parseJevResponse(response.status, response.ok, await response.text());
   }

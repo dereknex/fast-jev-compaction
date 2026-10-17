@@ -1,3 +1,4 @@
+import type { SessionMessage } from 'claude-code';
 import { describe, expect, it } from 'vitest';
 import {
   compactSession,
@@ -6,10 +7,8 @@ import {
   resolveHookConfig,
   summarize,
   toSessionMessages,
-} from '../hooks/fast-jev.ts';
+} from '../hooks/fast-jev.js';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
-
-type SessionMessage = Message & { handle?: string };
 
 function message(role: Message['role'], text: string, extra: Partial<SessionMessage> = {}): SessionMessage {
   return { role, text, toolUses: [], ...extra };

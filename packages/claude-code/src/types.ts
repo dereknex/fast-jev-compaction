@@ -5,18 +5,20 @@ export type Role = 'user' | 'assistant';
  * outcome once the transcript holds it (Claude Code attaches them).
  */
 export interface ToolUse {
-  tool_use_id: string;
+  tool_use_id?: string;
   tool: string;
   input: Record<string, unknown>;
   text?: string;
   isError?: boolean;
+  toolCallId?: string;
 }
 
 /** A tool_result block of a user message. */
 export interface ToolResult {
-  tool_use_id: string;
+  tool_use_id?: string;
   text: string;
   isError?: boolean;
+  toolCallId?: string;
 }
 
 /**
@@ -28,6 +30,7 @@ export interface Message {
   text: string;
   toolUses: ToolUse[];
   toolResults?: ToolResult[];
+  sourceIndex?: number;
 }
 
 /** A tool call paired with its result by `tool_use_id`. */
@@ -35,6 +38,7 @@ export interface ToolCall {
   /** Short id used in the Jev state and question names (`t1`, `t2`, ...). */
   id: string;
   tool_use_id: string;
+  toolCallId?: string;
   tool: string;
   input: Record<string, unknown>;
   /** Index of the message holding the tool_use block. */
@@ -58,6 +62,8 @@ export type CallAction = 'keep' | 'drop_result' | 'drop_call';
 
 export interface CallDecision extends CallAnswer {
   id: string;
+  tool_use_id?: string;
+  toolCallId?: string;
   tool: string;
   action: CallAction;
   reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
@@ -116,25 +122,34 @@ export interface ResolvedCompactOptions {
   truncateHeadChars: number;
 }
 
+export interface DecisionStats {
+  calls: number;
+  kept: number;
+  resultsDropped: number;
+  callsDropped: number;
+  pinned: number;
+  stateTokens: number;
+  /** Which fitting stage the state needed, '' when no request was made. */
+  stateStage: string;
+  requests: number;
+  ms: number;
+}
+
+export interface DecisionResult {
+  decisions: CallDecision[];
+  calls: ToolCall[];
+  stats: DecisionStats;
+}
+
 export interface CompactResult {
   /** The compacted transcript; untouched messages are the input objects. */
   messages: Message[];
   decisions: CallDecision[];
-  stats: {
+  stats: DecisionStats & {
     messagesBefore: number;
     messagesAfter: number;
     charsBefore: number;
     charsAfter: number;
-    calls: number;
-    kept: number;
-    resultsDropped: number;
-    callsDropped: number;
-    pinned: number;
-    stateTokens: number;
-    /** Which fitting stage the state needed, '' when no request was made. */
-    stateStage: string;
-    requests: number;
-    ms: number;
   };
 }
 
@@ -198,5 +213,5 @@ export interface JevResponse {
 
 /** Anything that can answer Jev questions: `JevClient`, or a host-provided adapter. */
 export interface JevAsker {
-  ask(state: JevState, questions: JevQuestions): Promise<JevResponse>;
+  ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse>;
 }

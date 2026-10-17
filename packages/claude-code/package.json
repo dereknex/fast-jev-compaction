@@ -1,0 +1,12 @@
+{
+  "name": "fast-jev-claude-code",
+  "version": "0.3.0",
+  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "validate": "claude plugin validate .claude-plugin/plugin.json"
+  }
+}

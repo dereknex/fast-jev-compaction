@@ -1,5 +1,6 @@
 {
   "name": "fast-jev-compaction",
+  "description": "Continuous, verbatim context compaction for Claude Code using TypeSafe Jev and Cloudflare Workers AI Clef.",
   "owner": {
     "name": "tamaratran",
     "url": "https://github.com/tamaratran"
@@ -7,7 +8,7 @@
   "plugins": [
     {
       "name": "fast-jev-compaction",
-      "source": "./",
+      "source": "./packages/claude-code",
       "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
       "version": "0.3.0",
       "license": "MIT"

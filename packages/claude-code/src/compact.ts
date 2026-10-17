@@ -6,6 +6,7 @@ import type {
   CompactOptions,
   CompactResult,
   CompactionState,
+  DecisionResult,
   JevAsker,
   JevQuestions,
   Message,
@@ -105,12 +106,24 @@ export function batchCalls(
 }
 
 export function decideCall(
-  call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
+  call: Pick<ToolCall, 'id' | 'tool' | 'pinned'> & {
+    tool_use_id?: string;
+    toolCallId?: string;
+  },
   answer: CallAnswer,
   options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
 ): CallDecision {
-  const base = { id: call.id, tool: call.tool, ...answer };
-  if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
+  const toolCallId = call.toolCallId ?? call.tool_use_id ?? call.id;
+  const base: CallDecision = {
+    id: call.id,
+    tool_use_id: call.tool_use_id ?? toolCallId,
+    toolCallId,
+    tool: call.tool,
+    ...answer,
+    action: 'keep',
+    reason: 'pinned',
+  };
+  if (call.pinned) return base;
   if (answer.keepResult >= options.keepThreshold) {
     return { ...base, action: 'keep', reason: 'kept' };
   }
@@ -124,9 +137,10 @@ async function askBatch(
   asker: JevAsker,
   state: CompactionState,
   batch: readonly ToolCall[],
+  signal?: AbortSignal,
 ): Promise<Map<string, CallAnswer>> {
   const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
-  const { answers } = await asker.ask(state, questions);
+  const { answers } = await asker.ask(state, questions, signal);
   return new Map(
     batch.map((call) => [
       call.id,
@@ -162,21 +176,34 @@ export function applyDecisions(
   const actions = new Map<string, CallDecision['action']>();
   for (const decision of decisions) {
     const call = byId.get(decision.id);
-    if (call && decision.action !== 'keep') actions.set(call.tool_use_id, decision.action);
+    if (call && decision.action !== 'keep') {
+      const id = call.toolCallId ?? call.tool_use_id;
+      if (id) actions.set(id, decision.action);
+    }
   }
   const kept: Message[] = [];
   for (const message of messages) {
     const touched =
-      message.toolUses.some((tool) => actions.has(tool.tool_use_id)) ||
-      (message.toolResults ?? []).some((result) => actions.has(result.tool_use_id));
+      message.toolUses.some((tool) => {
+        const id = tool.toolCallId ?? tool.tool_use_id;
+        return id ? actions.has(id) : false;
+      }) ||
+      (message.toolResults ?? []).some((result) => {
+        const id = result.toolCallId ?? result.tool_use_id;
+        return id ? actions.has(id) : false;
+      });
     if (!touched) {
       kept.push(message);
       continue;
     }
     const toolUses = message.toolUses
-      .filter((tool) => actions.get(tool.tool_use_id) !== 'drop_call')
+      .filter((tool) => {
+        const id = tool.toolCallId ?? tool.tool_use_id;
+        return id ? actions.get(id) !== 'drop_call' : true;
+      })
       .map((tool) => {
-        if (actions.get(tool.tool_use_id) !== 'drop_result') return tool;
+        const id = tool.toolCallId ?? tool.tool_use_id;
+        if (!id || actions.get(id) !== 'drop_result') return tool;
         const text = truncatedResultText(
           tool.text ?? '',
           tool.isError ?? false,
@@ -185,6 +212,7 @@ export function applyDecisions(
         if ((tool.text ?? '') === text) return tool;
         const copy: ToolUse = {
           tool_use_id: tool.tool_use_id,
+          toolCallId: tool.toolCallId,
           tool: tool.tool,
           input: tool.input,
           text,
@@ -193,25 +221,32 @@ export function applyDecisions(
         return copy;
       });
     const toolResults = (message.toolResults ?? [])
-      .filter((result) => actions.get(result.tool_use_id) !== 'drop_call')
+      .filter((result) => {
+        const id = result.toolCallId ?? result.tool_use_id;
+        return id ? actions.get(id) !== 'drop_call' : true;
+      })
       .map((result) => {
-        if (actions.get(result.tool_use_id) !== 'drop_result') return result;
+        const id = result.toolCallId ?? result.tool_use_id;
+        if (!id || actions.get(id) !== 'drop_result') return result;
         const text = truncatedResultText(result.text, result.isError ?? false, headChars);
         return text === result.text
           ? result
           : {
               tool_use_id: result.tool_use_id,
+              toolCallId: result.toolCallId,
               text,
               isError: result.isError,
             };
       });
     if (
-      !message.toolUses.some(
-        (tool) => actions.get(tool.tool_use_id) === 'drop_call',
-      ) &&
-      !(message.toolResults ?? []).some(
-        (result) => actions.get(result.tool_use_id) === 'drop_call',
-      ) &&
+      !message.toolUses.some((tool) => {
+        const id = tool.toolCallId ?? tool.tool_use_id;
+        return id ? actions.get(id) === 'drop_call' : false;
+      }) &&
+      !(message.toolResults ?? []).some((result) => {
+        const id = result.toolCallId ?? result.tool_use_id;
+        return id ? actions.get(id) === 'drop_call' : false;
+      }) &&
       toolUses.every((tool, index) => tool === message.toolUses[index]) &&
       toolResults.every(
         (result, index) => result === message.toolResults?.[index],
@@ -254,6 +289,56 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
 }
 
 /**
+ * Evaluates candidate tool calls and returns decisions and calls without modifying messages.
+ */
+export async function decide(
+  messages: readonly Message[],
+  asker: JevAsker,
+  options: CompactOptions = {},
+  signal?: AbortSignal,
+): Promise<DecisionResult> {
+  const started = Date.now();
+  const resolved = resolveOptions(options);
+  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
+  const candidates = calls.filter((call) => !call.pinned);
+
+  let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
+  let batches: ToolCall[][] = [];
+  const answers = new Map<string, CallAnswer>();
+  if (candidates.length > 0) {
+    signal?.throwIfAborted();
+    const state = fitState(messages, calls, resolved);
+    fitted = state;
+    batches = batchCalls(candidates, state.tokens, resolved);
+    const answered = await Promise.all(
+      batches.map((batch) => askBatch(asker, state.state, batch, signal)),
+    );
+    signal?.throwIfAborted();
+    for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
+  }
+
+  const decisions = calls.map((call) =>
+    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
+  );
+
+  return {
+    decisions,
+    calls,
+    stats: {
+      calls: calls.length,
+      kept: count(decisions, 'kept'),
+      resultsDropped: count(decisions, 'result_dropped'),
+      callsDropped: count(decisions, 'call_dropped'),
+      pinned: count(decisions, 'pinned'),
+      stateTokens: fitted.tokens,
+      stateStage: fitted.stage,
+      requests: batches.length,
+      ms: Date.now() - started,
+    },
+  };
+}
+
+/**
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
  * first and newest messages, whether the call and whether its result must
  * stay. The whole history (results omitted, fitted into `maxStateTokens`) is
@@ -265,51 +350,24 @@ export async function compact(
   asker: JevAsker,
   options: CompactOptions = {},
 ): Promise<CompactResult> {
-  const started = Date.now();
+  const result = await decide(messages, asker, options);
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
-  const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
-
-  let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
-  let batches: ToolCall[][] = [];
-  const answers = new Map<string, CallAnswer>();
-  if (candidates.length > 0) {
-    const state = fitState(messages, calls, resolved);
-    fitted = state;
-    batches = batchCalls(candidates, state.tokens, resolved);
-    const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
-    );
-    for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
-  }
-
-  const decisions = calls.map((call) =>
-    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
-  );
   const kept = applyDecisions(
     messages,
-    decisions,
-    calls,
+    result.decisions,
+    result.calls,
     resolved.truncateHeadChars,
   );
   return {
     messages: kept,
-    decisions,
+    decisions: result.decisions,
     stats: {
       messagesBefore: messages.length,
       messagesAfter: kept.length,
       charsBefore,
       charsAfter: kept.reduce((sum, message) => sum + messageChars(message), 0),
-      calls: calls.length,
-      kept: count(decisions, 'kept'),
-      resultsDropped: count(decisions, 'result_dropped'),
-      callsDropped: count(decisions, 'call_dropped'),
-      pinned: count(decisions, 'pinned'),
-      stateTokens: fitted.tokens,
-      stateStage: fitted.stage,
-      requests: batches.length,
-      ms: Date.now() - started,
+      ...result.stats,
     },
   };
 }

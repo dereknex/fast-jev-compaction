@@ -131,7 +131,7 @@ export function jevAsker(
 
 function toolUseSummary(tool: ToolUse): ToolUseSummary {
   const summary: ToolUseSummary = {
-    tool_use_id: tool.tool_use_id,
+    tool_use_id: tool.tool_use_id ?? tool.toolCallId ?? '',
     tool: tool.tool,
     input: tool.input,
   };
@@ -142,7 +142,7 @@ function toolUseSummary(tool: ToolUse): ToolUseSummary {
 
 function toolResultSummary(result: ToolResult): ToolResultSummary {
   return {
-    tool_use_id: result.tool_use_id,
+    tool_use_id: result.tool_use_id ?? result.toolCallId ?? '',
     text: result.text,
     isError: result.isError ?? false,
   };

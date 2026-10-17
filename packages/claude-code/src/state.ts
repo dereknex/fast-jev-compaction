@@ -66,17 +66,21 @@ export function collectToolCalls(
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
     for (const result of message.toolResults ?? []) {
-      results.set(result.tool_use_id, { index, result });
+      const id = result.tool_use_id || result.toolCallId;
+      if (id) results.set(id, { index, result });
     }
   });
   const calls: ToolCall[] = [];
   messages.forEach((message, callIndex) => {
     for (const tool of message.toolUses) {
-      const found = results.get(tool.tool_use_id);
+      const id = tool.tool_use_id || tool.toolCallId;
+      if (!id) continue;
+      const found = results.get(id);
       if (!found) continue;
       calls.push({
         id: `t${calls.length + 1}`,
-        tool_use_id: tool.tool_use_id,
+        tool_use_id: id,
+        toolCallId: id,
         tool: tool.tool,
         input: tool.input,
         callIndex,
