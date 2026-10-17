@@ -35,7 +35,7 @@ export TYPESAFE_API_KEY="<your TypeSafe key>"
 # export CLOUDFLARE_API_TOKEN="<your Cloudflare API token>"
 # export CLOUDFLARE_ACCOUNT_ID="<your Cloudflare account ID>"
 
-claude plugin marketplace add tamaratran/fast-jev-compaction
+claude plugin marketplace add dereknex/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 
