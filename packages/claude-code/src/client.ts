@@ -1,66 +1,60 @@
-import { buildJevRequest, isCloudflareModel, parseJevResponse } from './request.js';
+import {
+  buildJevRequest,
+  missingKeyMessage,
+  resolveEndpoint,
+  parseJevResponse,
+  type EndpointConfig,
+  type JevBackend,
+  type JevEndpoint,
+} from './request.js';
 import type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';
 
-export interface JevClientOptions {
-  /** Defaults to `process.env.TYPESAFE_API_KEY` or `process.env.CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_AUTH_TOKEN`. */
+export interface JevClientOptions extends EndpointConfig {
+  /** Defaults to the first set env var of the resolved backend's key chain. */
   apiKey?: string;
-  /** Defaults to `jev-latest`. Can be `@cf/cloudflare/clef`, `clef`, etc. */
-  model?: string;
-  /** Cloudflare account ID for Workers AI. Defaults to `process.env.CLOUDFLARE_ACCOUNT_ID`. */
-  accountId?: string;
-  /** Defaults to the System One endpoint or Cloudflare Workers AI endpoint. */
-  baseUrl?: string;
   /** Defaults to the global `fetch`. */
   fetch?: typeof fetch;
+}
+
+function envKey(keyEnvs: readonly string[]): string | undefined {
+  const env =
+    (globalThis as { process?: { env?: Record<string, string | undefined> } })
+      .process?.env;
+  for (const name of keyEnvs) {
+    const value = env?.[name]?.trim();
+    if (value) return value;
+  }
+  return undefined;
 }
 
 /** Asks Jev / Clef over HTTP with the global `fetch` (or an injected one). */
 export class JevClient implements JevAsker {
   private readonly apiKey: string;
-  private readonly model: string | undefined;
-  private readonly accountId: string | undefined;
-  private readonly baseUrl: string | undefined;
+  private readonly endpoint: JevEndpoint;
+  private readonly config: EndpointConfig;
   private readonly fetcher: typeof fetch;
 
   constructor(options: JevClientOptions = {}) {
-    this.model = options.model;
-    this.baseUrl = options.baseUrl;
-    const env =
-      (globalThis as { process?: { env?: Record<string, string | undefined> } })
-        .process?.env;
-    this.accountId = options.accountId ?? env?.CLOUDFLARE_ACCOUNT_ID;
+    this.config = {
+      backend: options.backend,
+      model: options.model,
+      baseUrl: options.baseUrl,
+      accountId: options.accountId,
+    };
+    this.endpoint = resolveEndpoint(this.config);
     this.fetcher = options.fetch ?? fetch;
+    this.apiKey = options.apiKey ?? envKey(this.endpoint.keyEnvs) ?? '';
+  }
 
-    const isCf = isCloudflareModel(this.model, this.baseUrl) || Boolean(this.accountId);
-    this.apiKey =
-      options.apiKey ??
-      (isCf
-        ? (env?.CLOUDFLARE_API_TOKEN ??
-           env?.CLOUDFLARE_AUTH_TOKEN ??
-           env?.TYPESAFE_API_KEY ??
-           '')
-        : (env?.TYPESAFE_API_KEY ??
-           env?.CLOUDFLARE_API_TOKEN ??
-           env?.CLOUDFLARE_AUTH_TOKEN ??
-           ''));
+  /** The backend this client resolved to (`typesafe` or `cloudflare`). */
+  get backend(): JevBackend {
+    return this.endpoint.backend;
   }
 
   async ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse> {
-    if (!this.apiKey) {
-      const isCf = isCloudflareModel(this.model, this.baseUrl) || Boolean(this.accountId);
-      throw new Error(
-        isCf
-          ? 'CLOUDFLARE_API_TOKEN (or CLOUDFLARE_AUTH_TOKEN) is not configured'
-          : 'TYPESAFE_API_KEY is not configured',
-      );
-    }
+    if (!this.apiKey) throw new Error(missingKeyMessage(this.endpoint.backend));
     const request = buildJevRequest(
-      {
-        apiKey: this.apiKey,
-        model: this.model,
-        accountId: this.accountId,
-        baseUrl: this.baseUrl,
-      },
+      { ...this.config, apiKey: this.apiKey },
       state,
       questions,
     );

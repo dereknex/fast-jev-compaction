@@ -63,6 +63,7 @@ const result = await compactMessages(transcript, {
 
 // Or using Cloudflare Workers AI Clef:
 const result = await compactMessages(transcript, {
+  backend: 'cloudflare',
   model: '@cf/cloudflare/clef', // or 'clef', 'clef-flash'
   accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
   apiKey: process.env.CLOUDFLARE_API_TOKEN,
@@ -78,7 +79,14 @@ See [`packages/core/README.md`](packages/core/README.md) for full library docume
 
 #### 1. Configuration (`~/.claude/settings.json`)
 
-Enable function hooks and configure credentials for either **TypeSafe Jev** or **Cloudflare Workers AI Clef**:
+Enable function hooks and pick a backend. Credentials are read from the plugin's
+`sensitive` `apiKey` option first, then from the backend's key chain in the process
+environment, then from the `env` block of `~/.claude/settings.json`:
+
+| `backend` | key chain | required besides the key |
+| --- | --- | --- |
+| `typesafe` (default) | `TYPESAFE_API_KEY` | — |
+| `cloudflare` | `CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_AUTH_TOKEN` → `TYPESAFE_API_KEY` | `accountId` (or `CLOUDFLARE_ACCOUNT_ID`) |
 
 **Using TypeSafe Jev (Default):**
 ```json
@@ -95,16 +103,35 @@ Enable function hooks and configure credentials for either **TypeSafe Jev** or *
 {
   "env": {
     "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1",
-    "CLOUDFLARE_API_TOKEN": "<your-cloudflare-api-token>",
-    "CLOUDFLARE_ACCOUNT_ID": "<your-cloudflare-account-id>"
+    "CLOUDFLARE_API_TOKEN": "<your-cloudflare-api-token>"
   }
 }
 ```
 
+Selecting the backend is a plugin option, not an env var. Non-interactively:
+
+```sh
+claude plugin configure fast-jev-compaction@fast-jev-compaction --values-stdin <<'JSON'
+{"backend":"cloudflare","model":"clef-flash","accountId":"<your-account-id>","compactAtPercent":"45"}
+JSON
+```
+
+or run `/plugin configure fast-jev-compaction@fast-jev-compaction` inside Claude Code.
+Claude Code stores **every** option as a string and passes unset ones as `""`; numeric
+options accept `"45"`, and `""` means "use the default". See
+[`packages/claude-code/hooks/README.md`](packages/claude-code/hooks/README.md) for the full
+option list.
+
 #### 2. Installation
 
-##### Option 1: Install from GitHub Marketplace (No checkout needed)
+From this checkout, validate the function-hook module first — the whole plugin refuses to
+load if it does not pass:
 
+```sh
+npm run validate:plugin
+```
+
+##### Option 1: Install from GitHub Marketplace (No checkout needed)
 ```sh
 claude plugin marketplace add dereknex/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
@@ -112,17 +139,25 @@ claude plugin install fast-jev-compaction@fast-jev-compaction
 
 ##### Option 2: Install from this Repository Checkout
 
+A folder marketplace keeps reading the checkout, so local edits apply on the next
+Claude Code start — no reinstall. A marketplace name can only be registered once, so
+remove a GitHub-sourced marketplace of the same name first:
+
 ```sh
 # Option A: Install directly from the local package directory
 claude plugin install ./packages/claude-code
 
 # Option B: Add the local monorepo as a marketplace source and install
+claude plugin marketplace remove fast-jev-compaction   # only if it points at GitHub
 claude plugin marketplace add .
 claude plugin install fast-jev-compaction@fast-jev-compaction
 
 # Option C: Run directly with --plugin-dir without installing
 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir ./packages/claude-code
 ```
+
+`claude plugin list` shows the resolved source path, which is the quickest way to tell a
+checkout install from a cached marketplace copy.
 
 See [`packages/claude-code/hooks/README.md`](packages/claude-code/hooks/README.md) for details.
 
@@ -149,6 +184,7 @@ pi -e ./packages/pi/extensions/pi-fast-jev-compaction.ts
 {
   "fastJevCompaction": {
     "enabled": true,
+    "backend": "typesafe",
     "model": "jev-latest",
     "compactAtPercent": 60,
     "minReductionRatio": 0.25,
@@ -163,7 +199,8 @@ Set your key in shell (`export TYPESAFE_API_KEY="<your-key>"`) or configure `api
 {
   "fastJevCompaction": {
     "enabled": true,
-    "model": "@cf/cloudflare/clef",
+    "backend": "cloudflare",
+    "model": "clef",
     "accountId": "<your-cloudflare-account-id>",
     "compactAtPercent": 60,
     "minReductionRatio": 0.25,
@@ -190,10 +227,37 @@ See [`packages/pi/README.md`](packages/pi/README.md) for details.
 | **Primary Model ID** | `jev-latest` | `@cf/cloudflare/clef` (shorthand: `clef`) |
 | **Fast Variant** | — | `@cf/cloudflare/clef-flash` (shorthand: `clef-flash`) |
 | **Provider** | TypeSafe System One | Cloudflare Workers AI |
-| **Endpoint (`baseUrl`)** | `https://api.typesafe.ai/v1/systemone` | `https://api.cloudflare.com/client/v4` (or custom AI Gateway) |
-| **Auth Credentials** | `TYPESAFE_API_KEY` | `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_AUTH_TOKEN`, `CLOUDFLARE_API_KEY`) |
+| **`backend` value** | `typesafe` | `cloudflare` |
+| **Endpoint** | `https://api.typesafe.ai/v1/systemone` | `https://api.cloudflare.com/client/v4` (or custom AI Gateway) |
+| **Auth Credentials** | `TYPESAFE_API_KEY` | `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_AUTH_TOKEN`) |
 | **Account Identifier** | *None* | `CLOUDFLARE_ACCOUNT_ID` |
 | **Supported Integrations** | Core library, Claude Code, Pi | Core library, Claude Code, Pi |
+
+---
+
+### Backend selection
+
+`backend` is the single switch that selects the provider. Everything else follows from it, and an unsupported combination fails loudly at load time (Pi disables pruning and says why, the Claude Code hook shows the error and falls back to the built-in summary) instead of silently calling the wrong API.
+
+| Field | `backend: "typesafe"` | `backend: "cloudflare"` |
+| --- | --- | --- |
+| `model` | `jev-latest` (default) | `clef`, `clef-flash`, `@cf/cloudflare/clef`, `@cf/cloudflare/clef-flash` |
+| `accountId` | not allowed | required unless `baseUrl` is set (falls back to `CLOUDFLARE_ACCOUNT_ID`) |
+| `baseUrl` | optional, used verbatim | optional, used verbatim |
+| key chain | `TYPESAFE_API_KEY` | `CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_AUTH_TOKEN` → `TYPESAFE_API_KEY` |
+
+Notes:
+- `baseUrl` has exactly one meaning: a **complete endpoint URL**, used as-is. For AI Gateway, pass the full
+  `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai/@cf/cloudflare/clef` URL.
+- When `backend` is omitted it is inferred from `model` / `baseUrl` / `accountId`, so older configs keep working.
+  Setting it explicitly is recommended.
+- Rejected combinations: `accountId` with `backend: "typesafe"`, a Clef model with
+  `backend: "typesafe"`, a non-Clef model with `backend: "cloudflare"`, and a `baseUrl` pointing at the
+  TypeSafe endpoint while the backend resolves to `cloudflare`.
+- In Claude Code every field is a plugin option (`claude plugin configure`), so `accountId` does not have to be
+  an environment variable there; in Pi the same fields live under `fastJevCompaction`. Every consumer (core
+  library, Pi extension, Claude Code hook) resolves the endpoint through one function, `resolveEndpoint()`, so
+  model, URL and key chain can never drift apart.
 
 ---
 
@@ -212,6 +276,8 @@ In `~/.claude/settings.json`:
   }
 }
 ```
+`backend: "typesafe"` with `model: "jev-latest"` is the plugin default, so no plugin
+configuration is needed for this backend.
 
 #### 2. Pi Coding Agent
 In `~/.pi/agent/settings.json` (or `.pi/settings.json`):
@@ -219,6 +285,7 @@ In `~/.pi/agent/settings.json` (or `.pi/settings.json`):
 {
   "fastJevCompaction": {
     "enabled": true,
+    "backend": "typesafe",
     "model": "jev-latest",
     "compactAtPercent": 60,
     "minReductionRatio": 0.25,
@@ -268,10 +335,10 @@ const client = new JevClient({
 - `https://developers.cloudflare.com/workers-ai/models/clef/`: Full Cloudflare docs URL format is also recognized.
 
 #### Required Credentials & Environment Variables
-- **`CLOUDFLARE_API_TOKEN`** (or `CLOUDFLARE_AUTH_TOKEN`, `CLOUDFLARE_API_KEY`): Cloudflare API token with `Workers AI: Read` permission.
+- **`CLOUDFLARE_API_TOKEN`** (or `CLOUDFLARE_AUTH_TOKEN`): Cloudflare API token with `Workers AI: Read` permission.
 - **`CLOUDFLARE_ACCOUNT_ID`**: Your Cloudflare Account ID.
-- **`baseUrl`** *(optional)*: Custom API endpoint, such as Cloudflare AI Gateway URL:
-  `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai/@cf/cloudflare/clef`
+- **`baseUrl`** *(optional)*: A complete endpoint URL, used as-is. For AI Gateway, pass the full
+  `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai/@cf/cloudflare/clef`.
 
 #### 1. Claude Code
 In `~/.claude/settings.json`:
@@ -284,7 +351,14 @@ In `~/.claude/settings.json`:
   }
 }
 ```
-Specify the model identifier in your plugin configuration or run directly with:
+Select the backend through the plugin options (`backend`, `model`, `accountId`);
+`CLOUDFLARE_ACCOUNT_ID` is only a fallback for `accountId`:
+```sh
+claude plugin configure fast-jev-compaction@fast-jev-compaction --values-stdin <<'JSON'
+{"backend":"cloudflare","model":"clef","accountId":"<your-cloudflare-account-id>"}
+JSON
+```
+Or run directly from a checkout:
 ```sh
 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 \
 CLOUDFLARE_API_TOKEN="<your-token>" \
@@ -298,7 +372,8 @@ In `~/.pi/agent/settings.json` (or `.pi/settings.json`):
 {
   "fastJevCompaction": {
     "enabled": true,
-    "model": "@cf/cloudflare/clef",
+    "backend": "cloudflare",
+    "model": "clef",
     "accountId": "<your-cloudflare-account-id>",
     "compactAtPercent": 60,
     "minReductionRatio": 0.25,
@@ -314,7 +389,8 @@ Or securely retrieve it via dynamic command (e.g. 1Password CLI):
 ```json
 {
   "fastJevCompaction": {
-    "model": "@cf/cloudflare/clef",
+    "backend": "cloudflare",
+    "model": "clef",
     "accountId": "<your-cloudflare-account-id>",
     "apiKeyCommand": "op read op://personal/cloudflare/token"
   }
@@ -327,15 +403,17 @@ import { compactMessages, JevClient } from 'fast-jev-compaction';
 
 // Using compactMessages with Clef:
 const result = await compactMessages(transcript, {
-  model: '@cf/cloudflare/clef', // or 'clef', 'clef-flash'
+  backend: 'cloudflare',
+  model: 'clef', // or 'clef-flash', '@cf/cloudflare/clef'
   accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
   apiKey: process.env.CLOUDFLARE_API_TOKEN,
   preserveRecentMessages: 4,
 });
 
-// Or using JevClient with optional AI Gateway:
+// Or using JevClient with optional AI Gateway (baseUrl is a complete endpoint URL):
 const client = new JevClient({
-  model: '@cf/cloudflare/clef',
+  backend: 'cloudflare',
+  model: 'clef',
   accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
   apiKey: process.env.CLOUDFLARE_API_TOKEN,
   // baseUrl: 'https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway>/workers-ai/@cf/cloudflare/clef', // optional

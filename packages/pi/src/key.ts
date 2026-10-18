@@ -1,8 +1,9 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
-import { isCloudflareModel } from 'fast-jev-compaction';
+import { missingKeyMessage, resolveEndpoint } from 'fast-jev-compaction';
 
 export interface KeyResolutionContext {
+  backend?: 'typesafe' | 'cloudflare';
   model?: string;
   baseUrl?: string;
   accountId?: string;
@@ -23,24 +24,16 @@ export function createKeyResolver(pi: Pick<ExtensionAPI, 'exec'>): KeyResolver {
   return {
     async resolve(apiKeyCommand, signal, context) {
       if (cached) return cached;
-      const isCf =
-        isCloudflareModel(context?.model, context?.baseUrl) ||
-        Boolean(context?.accountId);
-      const fromEnvironment = isCf
-        ? (process.env.CLOUDFLARE_API_TOKEN?.trim() ||
-           process.env.CLOUDFLARE_API_KEY?.trim() ||
-           process.env.TYPESAFE_API_KEY?.trim())
-        : process.env.TYPESAFE_API_KEY?.trim();
+      const { backend, keyEnvs } = resolveEndpoint(context ?? {});
+      const fromEnvironment = keyEnvs
+        .map((name) => process.env[name]?.trim())
+        .find((value): value is string => Boolean(value));
       if (fromEnvironment) {
         cached = fromEnvironment;
         return cached;
       }
       if (!apiKeyCommand) {
-        throw new Error(
-          isCf
-            ? 'Cloudflare API token is not configured'
-            : 'TypeSafe API key is not configured',
-        );
+        throw new Error(missingKeyMessage(backend));
       }
       const result = await pi.exec('sh', ['-lc', apiKeyCommand], {
         signal,
@@ -49,7 +42,7 @@ export function createKeyResolver(pi: Pick<ExtensionAPI, 'exec'>): KeyResolver {
       const value = result.stdout.trim();
       if (result.code !== 0 || !value) {
         throw new Error(
-          isCf
+          backend === 'cloudflare'
             ? 'Cloudflare API token command failed'
             : 'TypeSafe API key command failed',
         );

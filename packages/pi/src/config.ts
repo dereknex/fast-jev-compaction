@@ -3,13 +3,15 @@ import { join } from 'node:path';
 
 import { CONFIG_DIR_NAME, getAgentDir } from '@earendil-works/pi-coding-agent';
 
-import { DEFAULT_MODEL, SYSTEM_ONE_URL } from 'fast-jev-compaction';
+import { DEFAULT_MODEL, resolveEndpoint, type JevBackend } from 'fast-jev-compaction';
 
 export interface FastJevConfig {
   enabled: boolean;
+  /** Unset means "infer from model / baseUrl / accountId". */
+  backend?: JevBackend;
   apiKeyCommand?: string;
   model: string;
-  baseUrl: string;
+  baseUrl?: string;
   accountId?: string;
   goal: string;
   keepThreshold: number;
@@ -25,7 +27,6 @@ export interface FastJevConfig {
 export const DEFAULT_CONFIG: FastJevConfig = {
   enabled: true,
   model: DEFAULT_MODEL,
-  baseUrl: SYSTEM_ONE_URL,
   goal: '',
   keepThreshold: 0.5,
   preserveRecentMessages: 6,
@@ -70,6 +71,13 @@ function nonEmptyString(value: unknown, fallback: string): string {
     : fallback;
 }
 
+function backendValue(
+  value: unknown,
+  fallback: JevBackend | undefined,
+): JevBackend | undefined {
+  return value === 'typesafe' || value === 'cloudflare' ? value : fallback;
+}
+
 export function parseConfig(
   value: unknown,
   base: FastJevConfig = DEFAULT_CONFIG,
@@ -85,12 +93,15 @@ export function parseConfig(
       ? value.accountId.trim()
       : undefined;
   const accountId = accountIdVal ?? base.accountId;
-  return {
+  const baseUrl = nonEmptyString(value.baseUrl, '') || base.baseUrl;
+  const backend = backendValue(value.backend, base.backend);
+  const config: FastJevConfig = {
     enabled: typeof value.enabled === 'boolean' ? value.enabled : base.enabled,
+    ...(backend ? { backend } : {}),
     ...(apiKeyCommand ? { apiKeyCommand } : {}),
     ...(accountId ? { accountId } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
     model: nonEmptyString(value.model, base.model),
-    baseUrl: nonEmptyString(value.baseUrl, base.baseUrl),
     goal: typeof value.goal === 'string' ? value.goal : base.goal,
     keepThreshold: finiteInRange(value.keepThreshold, base.keepThreshold, 0, 1),
     preserveRecentMessages: Math.floor(
@@ -131,6 +142,15 @@ export function parseConfig(
       finiteInRange(value.cooldownTokens, base.cooldownTokens, 0, 1_000_000),
     ),
   };
+  // An enabled config must resolve to a reachable endpoint: fail at load
+  // instead of failing every decision run with an opaque API error.
+  if (config.enabled) validateConfig(config);
+  return config;
+}
+
+/** Throws when the backend and its fields do not form a reachable endpoint. */
+export function validateConfig(config: FastJevConfig): void {
+  resolveEndpoint(config);
 }
 
 export async function loadConfig(

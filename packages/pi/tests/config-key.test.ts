@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { resolveEndpoint } from 'fast-jev-compaction';
+
 import { DEFAULT_CONFIG, parseConfig } from '../src/config.js';
 import { createKeyResolver } from '../src/key.js';
 
@@ -30,6 +32,46 @@ describe('configuration boundary', () => {
       cooldownTokens: 100,
       apiKeyCommand: 'key-command',
     });
+  });
+});
+
+describe('backend selection', () => {
+  it('leaves backend and baseUrl unset so the resolver picks TypeSafe', () => {
+    const config = parseConfig({});
+    expect(config.backend).toBeUndefined();
+    expect(config.model).toBe('jev-latest');
+    expect('baseUrl' in config).toBe(false);
+    expect(resolveEndpoint(config).backend).toBe('typesafe');
+  });
+
+  it('still infers the cloudflare backend from a legacy Clef config', () => {
+    const legacy = parseConfig({ model: '@cf/cloudflare/clef', accountId: 'acc-1' });
+    expect(legacy.backend).toBeUndefined();
+    expect(resolveEndpoint(legacy).url).toBe(
+      'https://api.cloudflare.com/client/v4/accounts/acc-1/ai/run/@cf/cloudflare/clef',
+    );
+  });
+
+  it('accepts the cloudflare backend with its own fields', () => {
+    expect(
+      parseConfig({ backend: 'cloudflare', model: 'clef-flash', accountId: 'acc-1' }),
+    ).toMatchObject({ backend: 'cloudflare', model: 'clef-flash', accountId: 'acc-1' });
+    expect(parseConfig({ backend: 'nope' }).backend).toBeUndefined();
+  });
+
+  it('rejects combinations that cannot reach an endpoint', () => {
+    // A Clef model without an account never silently falls back to TypeSafe.
+    expect(() => parseConfig({ model: 'clef-flash' })).toThrow(/accountId is required/);
+    expect(() => parseConfig({ backend: 'cloudflare', model: 'clef' })).toThrow(
+      /accountId is required/,
+    );
+    expect(() => parseConfig({ backend: 'typesafe', model: 'clef' })).toThrow(
+      /is a Clef model/,
+    );
+    expect(() =>
+      parseConfig({ backend: 'typesafe', accountId: 'acc-1' }),
+    ).toThrow(/only valid with backend "cloudflare"/);
+    expect(() => parseConfig({ backend: 'cloudflare', enabled: false, model: 'clef' })).not.toThrow();
   });
 });
 

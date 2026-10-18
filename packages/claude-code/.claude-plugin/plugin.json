@@ -13,15 +13,20 @@
       "description": "API key or token: TYPESAFE_API_KEY for TypeSafe, or CLOUDFLARE_API_TOKEN / CLOUDFLARE_AUTH_TOKEN for Cloudflare.",
       "sensitive": true
     },
+    "backend": {
+      "type": "string",
+      "title": "Backend",
+      "description": "Decision backend: 'typesafe' or 'cloudflare'. Leave unset to infer it from model, baseUrl or accountId."
+    },
     "accountId": {
       "type": "string",
       "title": "Cloudflare Account ID",
-      "description": "Cloudflare account ID for Workers AI. Leave unset to use CLOUDFLARE_ACCOUNT_ID."
+      "description": "Cloudflare account ID for Workers AI; required when backend is 'cloudflare' unless baseUrl is set. Leave unset to use CLOUDFLARE_ACCOUNT_ID."
     },
     "baseUrl": {
       "type": "string",
       "title": "Base URL",
-      "description": "Custom API endpoint (e.g. Cloudflare AI Gateway URL or custom System One endpoint)."
+      "description": "Complete endpoint URL, used verbatim (e.g. https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/workers-ai/@cf/cloudflare/clef)."
     },
     "keepThreshold": {
       "type": "number",
@@ -65,10 +70,15 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "goal": {
+      "type": "string",
+      "title": "Goal",
+      "description": "Optional task goal sent with every decision request; it helps the decision model weigh what still matters."
+    },
     "model": {
       "type": "string",
       "title": "Model",
-      "description": "Decision model selector: 'jev-latest' (TypeSafe), '@cf/cloudflare/clef' or 'clef' (Cloudflare Workers AI), '@cf/cloudflare/clef-flash'.",
+      "description": "Decision model selector: 'jev-latest' (backend typesafe), or 'clef' / 'clef-flash' / '@cf/cloudflare/clef' / '@cf/cloudflare/clef-flash' (backend cloudflare).",
       "default": "jev-latest"
     }
   }

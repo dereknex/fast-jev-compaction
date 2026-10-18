@@ -30,6 +30,7 @@ In `~/.pi/agent/settings.json` or `.pi/settings.json`:
 {
   "fastJevCompaction": {
     "enabled": true,
+    "backend": "typesafe",
     "model": "jev-latest",
     "compactAtPercent": 60,
     "minReductionRatio": 0.25,
@@ -45,11 +46,26 @@ For Cloudflare Workers AI Clef:
 ```json
 {
   "fastJevCompaction": {
-    "model": "@cf/cloudflare/clef",
+    "backend": "cloudflare",
+    "model": "clef-flash",
     "accountId": "your-cloudflare-account-id"
   }
 }
 ```
+
+### `backend` selects the provider
+
+| Field | `backend: "typesafe"` | `backend: "cloudflare"` |
+| --- | --- | --- |
+| `model` | `jev-latest` (default) | `clef`, `clef-flash`, `@cf/cloudflare/*` |
+| `accountId` | not allowed | required unless `baseUrl` is set (else `CLOUDFLARE_ACCOUNT_ID`) |
+| `baseUrl` | optional, **complete endpoint URL**, used verbatim | optional, same meaning |
+| key | `TYPESAFE_API_KEY` | `CLOUDFLARE_API_TOKEN` → `CLOUDFLARE_AUTH_TOKEN` → `TYPESAFE_API_KEY` |
+
+An unsupported combination is rejected at session start: the extension logs
+`fast-jev: disabled; <reason>` and leaves Pi's own compaction untouched. Omitting
+`backend` falls back to inference from `model` / `baseUrl` / `accountId` so older
+configs keep loading, but setting it explicitly is recommended.
 
 ## Commands
 

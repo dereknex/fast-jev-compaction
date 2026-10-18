@@ -14,11 +14,43 @@ export interface JevRequest {
   body: string;
 }
 
-export interface BuildJevRequestParams {
-  apiKey: string;
+export type JevBackend = 'typesafe' | 'cloudflare';
+
+/** Everything that decides where a Jev / Clef call goes. */
+export interface EndpointConfig {
+  /** Explicit backend; when omitted it is inferred from model / baseUrl / accountId. */
+  backend?: JevBackend;
   model?: string;
+  /** A complete endpoint URL, used verbatim. */
   baseUrl?: string;
   accountId?: string;
+}
+
+/** One backend, one URL, one body model, one key chain. */
+export interface JevEndpoint {
+  backend: JevBackend;
+  url: string;
+  bodyModel: string;
+  /** Environment variables holding the API key, highest priority first. */
+  keyEnvs: readonly string[];
+}
+
+export interface BuildJevRequestParams extends EndpointConfig {
+  apiKey: string;
+}
+
+const TYPESAFE_KEY_ENVS = ['TYPESAFE_API_KEY'] as const;
+const CLOUDFLARE_KEY_ENVS = [
+  'CLOUDFLARE_API_TOKEN',
+  'CLOUDFLARE_AUTH_TOKEN',
+  'TYPESAFE_API_KEY',
+] as const;
+
+/** The key-missing message for a backend, shared by every caller. */
+export function missingKeyMessage(backend: JevBackend): string {
+  return backend === 'cloudflare'
+    ? 'CLOUDFLARE_API_TOKEN (or CLOUDFLARE_AUTH_TOKEN) is not configured'
+    : 'TYPESAFE_API_KEY is not configured';
 }
 
 /** Checks whether a model or baseUrl targets Cloudflare Workers AI. */
@@ -82,54 +114,93 @@ export function normalizeCloudflareModel(model?: string): {
   };
 }
 
+/** The backend a config resolves to when `backend` is not set explicitly. */
+export function inferBackend(config: EndpointConfig): JevBackend {
+  if (config.backend) return config.backend;
+  return isCloudflareModel(config.model, config.baseUrl) ||
+    Boolean(config.accountId)
+    ? 'cloudflare'
+    : 'typesafe';
+}
+
+/**
+ * Resolves backend, URL, body model and key chain from one config. Every caller
+ * goes through here, so an unsupported combination fails loudly instead of
+ * silently hitting the wrong API.
+ */
+export function resolveEndpoint(config: EndpointConfig = {}): JevEndpoint {
+  const backend = inferBackend(config);
+  const model = config.model?.trim() || undefined;
+
+  if (backend === 'cloudflare') {
+    if (model && !isCloudflareModel(model)) {
+      throw new Error(
+        `model "${model}" is not a Clef model; use clef or clef-flash with backend "cloudflare"`,
+      );
+    }
+    if (config.baseUrl) {
+      if (config.baseUrl === SYSTEM_ONE_URL) {
+        throw new Error(
+          'baseUrl points at the TypeSafe endpoint but the backend resolves to "cloudflare"; unset baseUrl or set backend "typesafe"',
+        );
+      }
+      return {
+        backend,
+        url: config.baseUrl,
+        bodyModel: normalizeCloudflareModel(model ?? config.baseUrl).bodyModel,
+        keyEnvs: CLOUDFLARE_KEY_ENVS,
+      };
+    }
+    const envAccountId =
+      (globalThis as { process?: { env?: Record<string, string | undefined> } })
+        .process?.env?.CLOUDFLARE_ACCOUNT_ID;
+    const accountId = config.accountId ?? envAccountId;
+    if (!accountId) {
+      throw new Error(
+        'Cloudflare accountId is required for Clef models (set accountId, CLOUDFLARE_ACCOUNT_ID, or a full baseUrl)',
+      );
+    }
+    const { urlModel, bodyModel } = normalizeCloudflareModel(model);
+    return {
+      backend,
+      url: `${CLOUDFLARE_AI_BASE_URL}/accounts/${accountId}/ai/run/${urlModel}`,
+      bodyModel,
+      keyEnvs: CLOUDFLARE_KEY_ENVS,
+    };
+  }
+
+  if (config.accountId) {
+    throw new Error('accountId is only valid with backend "cloudflare"');
+  }
+  if (model && isCloudflareModel(model)) {
+    throw new Error(
+      `model "${model}" is a Clef model; set backend "cloudflare" and an accountId`,
+    );
+  }
+  return {
+    backend: 'typesafe',
+    url: config.baseUrl ?? SYSTEM_ONE_URL,
+    bodyModel: model ?? DEFAULT_MODEL,
+    keyEnvs: TYPESAFE_KEY_ENVS,
+  };
+}
+
 /** The HTTP request for one Jev / Clef call, for any fetch-like transport. */
 export function buildJevRequest(
   params: BuildJevRequestParams,
   state: JevState,
   questions: JevQuestions,
 ): JevRequest {
-  const isCf = isCloudflareModel(params.model, params.baseUrl) || Boolean(params.accountId);
-  let url: string;
-  let bodyModel: string;
-
-  if (params.baseUrl) {
-    url = params.baseUrl;
-    if (params.model) {
-      bodyModel = isCloudflareModel(params.model)
-        ? normalizeCloudflareModel(params.model).bodyModel
-        : params.model;
-    } else if (isCf) {
-      bodyModel = normalizeCloudflareModel(params.baseUrl).bodyModel;
-    } else {
-      bodyModel = DEFAULT_MODEL;
-    }
-  } else if (isCf) {
-    const envAccountId =
-      (globalThis as { process?: { env?: Record<string, string | undefined> } })
-        .process?.env?.CLOUDFLARE_ACCOUNT_ID;
-    const accountId = params.accountId ?? envAccountId;
-    if (!accountId) {
-      throw new Error(
-        'Cloudflare accountId is required for Workers AI models (set accountId or CLOUDFLARE_ACCOUNT_ID, or provide baseUrl)',
-      );
-    }
-    const { urlModel, bodyModel: cfBodyModel } = normalizeCloudflareModel(params.model);
-    url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${urlModel}`;
-    bodyModel = cfBodyModel;
-  } else {
-    url = SYSTEM_ONE_URL;
-    bodyModel = params.model ?? DEFAULT_MODEL;
-  }
-
+  const endpoint = resolveEndpoint(params);
   return {
-    url,
+    url: endpoint.url,
     method: 'POST',
     headers: {
       authorization: `Bearer ${params.apiKey}`,
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: bodyModel,
+      model: endpoint.bodyModel,
       state,
       questions,
     }),

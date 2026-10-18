@@ -12,8 +12,10 @@ import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
 import {
   buildJevRequest,
   DEFAULT_MODEL,
-  isCloudflareModel,
+  missingKeyMessage,
   parseJevResponse,
+  resolveEndpoint,
+  type JevBackend,
 } from '../src/request.js';
 import type {
   CompactOptions,
@@ -47,6 +49,7 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  backend?: JevBackend;
   accountId?: string;
   baseUrl?: string;
   compactAtPercent: number;
@@ -56,7 +59,11 @@ export type HookConfig = CompactOptions & {
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  // Claude Code stores every userConfig value as a string, and passes unset ones
+  // as ""; an empty string means "not configured", not zero.
+  const trimmed = typeof value === 'string' ? value.trim() : undefined;
+  const parsed = trimmed === '' ? Number.NaN : (trimmed === undefined ? value : Number(trimmed));
+  return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function optionString(options: PluginOptions, key: string): string | undefined {
@@ -74,8 +81,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxRequestTokens',
     'truncateHeadChars',
   ] as const) {
-    const value = options[key];
-    if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
+    const value = optionNumber(options, key, Number.NaN);
+    if (Number.isFinite(value)) numbers[key] = value;
   }
   const config: HookConfig = {
     ...numbers,
@@ -89,6 +96,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
+  const backend = optionString(options, 'backend');
+  if (backend === 'typesafe' || backend === 'cloudflare') config.backend = backend;
   const accountId = optionString(options, 'accountId');
   if (accountId) config.accountId = accountId;
   const baseUrl = optionString(options, 'baseUrl');
@@ -100,6 +109,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
 
 export type JevAskerOptions = {
   apiKey: string;
+  backend?: JevBackend;
   model?: string;
   accountId?: string;
   baseUrl?: string;
@@ -195,17 +205,13 @@ export async function compactSession(
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
   if (!config.apiKey) {
-    const isCf = isCloudflareModel(config.model, config.baseUrl) || Boolean(config.accountId);
-    throw new Error(
-      isCf
-        ? 'CLOUDFLARE_API_TOKEN (or CLOUDFLARE_AUTH_TOKEN) is not configured'
-        : 'TYPESAFE_API_KEY is not configured',
-    );
+    throw new Error(missingKeyMessage(resolveEndpoint(config).backend));
   }
   const result = await compact(
     messages,
     jevAsker(fetchFn, {
       apiKey: config.apiKey,
+      backend: config.backend,
       model: config.model,
       accountId: config.accountId,
       baseUrl: config.baseUrl,
@@ -290,27 +296,18 @@ async function getApiKey(
   config: HookConfig,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
-  const isCf = isCloudflareModel(config.model, config.baseUrl) || Boolean(config.accountId);
-
-  if (isCf) {
-    const cfToken =
-      (await $.env.get('CLOUDFLARE_API_TOKEN')) ??
-      (await $.env.get('CLOUDFLARE_AUTH_TOKEN')) ??
-      (await readSetting($, 'CLOUDFLARE_API_TOKEN')) ??
-      (await readSetting($, 'CLOUDFLARE_AUTH_TOKEN'));
-    if (cfToken) return cfToken;
-    return (await $.env.get('TYPESAFE_API_KEY')) ?? (await readSetting($, 'TYPESAFE_API_KEY'));
+  // Function hooks only allow literal names in $.env.get, so read the chain up
+  // front and then pick by the backend's order.
+  const fromEnv: Record<string, string | undefined> = {
+    CLOUDFLARE_API_TOKEN: await $.env.get('CLOUDFLARE_API_TOKEN'),
+    CLOUDFLARE_AUTH_TOKEN: await $.env.get('CLOUDFLARE_AUTH_TOKEN'),
+    TYPESAFE_API_KEY: await $.env.get('TYPESAFE_API_KEY'),
+  };
+  for (const name of resolveEndpoint(config).keyEnvs) {
+    const value = fromEnv[name] ?? (await readSetting($, name));
+    if (value) return value;
   }
-
-  const tsKey =
-    (await $.env.get('TYPESAFE_API_KEY')) ?? (await readSetting($, 'TYPESAFE_API_KEY'));
-  if (tsKey) return tsKey;
-  return (
-    (await $.env.get('CLOUDFLARE_API_TOKEN')) ??
-    (await $.env.get('CLOUDFLARE_AUTH_TOKEN')) ??
-    (await readSetting($, 'CLOUDFLARE_API_TOKEN')) ??
-    (await readSetting($, 'CLOUDFLARE_AUTH_TOKEN'))
-  );
+  return undefined;
 }
 
 async function getAccountId(

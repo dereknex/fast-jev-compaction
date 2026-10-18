@@ -11,12 +11,15 @@ import {
   decideCall,
   estimateTokens,
   fitState,
+  inferBackend,
   isCloudflareModel,
   JevClient,
   MAX_CALLS_PER_BATCH,
+  missingKeyMessage,
   normalizeCloudflareModel,
   parseJevResponse,
   reductionRatio,
+  resolveEndpoint,
   resolveOptions,
   type HistoryToolCall,
   type JevAsker,
@@ -626,5 +629,85 @@ describe('HTTP client', () => {
       expect(batches[1]).toHaveLength(MAX_CALLS_PER_BATCH);
       expect(batches[2]).toHaveLength(6);
     });
+  });
+});
+
+describe('resolveEndpoint', () => {
+  const clefModels = ['clef', 'clef-flash', '@cf/cloudflare/clef', '@cf/cloudflare/clef-flash'];
+
+  it('defaults to TypeSafe and keeps one key chain per backend', () => {
+    expect(resolveEndpoint()).toMatchObject({
+      backend: 'typesafe',
+      url: 'https://api.typesafe.ai/v1/systemone',
+      bodyModel: 'jev-latest',
+      keyEnvs: ['TYPESAFE_API_KEY'],
+    });
+    expect(resolveEndpoint({ model: 'jev-test' }).bodyModel).toBe('jev-test');
+    expect(
+      resolveEndpoint({ backend: 'cloudflare', model: 'clef-flash', accountId: 'acc-1' }),
+    ).toMatchObject({
+      backend: 'cloudflare',
+      url: 'https://api.cloudflare.com/client/v4/accounts/acc-1/ai/run/@cf/cloudflare/clef-flash',
+      bodyModel: 'clef-flash',
+      keyEnvs: ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_AUTH_TOKEN', 'TYPESAFE_API_KEY'],
+    });
+  });
+
+  it('treats baseUrl as a complete endpoint URL for either backend', () => {
+    const gateway =
+      'https://gateway.ai.cloudflare.com/v1/acc-1/gw/workers-ai/@cf/cloudflare/clef';
+    expect(resolveEndpoint({ baseUrl: gateway })).toMatchObject({
+      backend: 'cloudflare',
+      url: gateway,
+      bodyModel: 'clef',
+    });
+    expect(
+      resolveEndpoint({ backend: 'typesafe', baseUrl: 'https://jev.internal/v1' }),
+    ).toMatchObject({
+      backend: 'typesafe',
+      url: 'https://jev.internal/v1',
+      bodyModel: 'jev-latest',
+    });
+  });
+
+  it('rejects every unsupported backend/model/field combination', () => {
+    expect(() => resolveEndpoint({ backend: 'typesafe', accountId: 'acc-1' })).toThrow(
+      /accountId is only valid with backend "cloudflare"/,
+    );
+    for (const model of clefModels) {
+      expect(() => resolveEndpoint({ backend: 'typesafe', model })).toThrow(
+        /is a Clef model; set backend "cloudflare"/,
+      );
+    }
+    expect(() =>
+      resolveEndpoint({ backend: 'cloudflare', model: 'clef' }),
+    ).toThrow(/Cloudflare accountId is required/);
+    expect(() =>
+      resolveEndpoint({ backend: 'cloudflare', model: 'jev-latest', accountId: 'acc-1' }),
+    ).toThrow(/is not a Clef model/);
+  });
+
+  it('reports the missing key for the resolved backend', () => {
+    expect(missingKeyMessage('typesafe')).toMatch(/TYPESAFE_API_KEY/);
+    expect(missingKeyMessage('cloudflare')).toMatch(/CLOUDFLARE_API_TOKEN/);
+  });
+});
+
+describe('endpoint guardrails', () => {
+  it('refuses the TypeSafe endpoint for a Clef model instead of calling it', () => {
+    expect(() =>
+      resolveEndpoint({
+        model: 'clef-flash',
+        baseUrl: 'https://api.typesafe.ai/v1/systemone',
+        accountId: 'acc-1',
+      }),
+    ).toThrow(/points at the TypeSafe endpoint/);
+  });
+
+  it('infers the backend when backend is not set', () => {
+    expect(inferBackend({ model: 'clef' })).toBe('cloudflare');
+    expect(inferBackend({ accountId: 'acc-1' })).toBe('cloudflare');
+    expect(inferBackend({ model: 'jev-latest' })).toBe('typesafe');
+    expect(inferBackend({ backend: 'typesafe', model: 'clef' })).toBe('typesafe');
   });
 });

@@ -130,6 +130,7 @@ export function installFastJevCompaction(
         )
       ) {
         const apiKey = await resolveKey.resolve(config.apiKeyCommand, signal, {
+          backend: config.backend,
           model: config.model,
           baseUrl: config.baseUrl,
           accountId: config.accountId,
@@ -139,6 +140,7 @@ export function installFastJevCompaction(
           adapted,
           createAsker({
             apiKey,
+            backend: config.backend,
             model: config.model,
             baseUrl: config.baseUrl,
             accountId: config.accountId,
@@ -153,6 +155,7 @@ export function installFastJevCompaction(
         adapted,
         createAsker({
           apiKey: '',
+          backend: config.backend,
           model: config.model,
           baseUrl: config.baseUrl,
           accountId: config.accountId,
@@ -232,8 +235,18 @@ export function installFastJevCompaction(
   );
 
   pi.on('session_start', async (_event, ctx) => {
-    config = await configLoader(ctx.cwd, ctx.isProjectTrusted());
-    enabled = config.enabled;
+    try {
+      config = await configLoader(ctx.cwd, ctx.isProjectTrusted());
+      enabled = config.enabled;
+    } catch (error) {
+      // An unreachable backend must not break the session: turn pruning off and say why.
+      config = { ...DEFAULT_CONFIG };
+      enabled = false;
+      ctx.ui.notify(
+        `fast-jev: disabled; ${error instanceof Error ? error.message : String(error)}`,
+        'error',
+      );
+    }
     ledger = rebuildLedger(ctx.sessionManager.getBranch());
     lifecycle.stop();
     lifecycle = new CompactionLifecycle(config.cooldownTokens);

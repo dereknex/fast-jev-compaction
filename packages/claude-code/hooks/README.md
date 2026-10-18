@@ -3,7 +3,7 @@
 This plugin uses Claude Code function hooks to replace a compaction with the
 original messages, minus the tool calls and tool results Jev judged no longer
 needed. `hooks/fast-jev.ts` is a thin adapter: it reads the plugin options,
-finds the TypeSafe key, hands `session.compact` transcripts to the
+resolves the backend and its key, hands `session.compact` transcripts to the
 `fast-jev-compaction` library in `src/` (the plugin folder is the repository
 root, so the hook imports it directly) and maps the result back onto session
 messages. User and assistant text is never touched. Jev is sent the whole
@@ -39,10 +39,21 @@ claude plugin marketplace add dereknex/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 
-For local development:
+For local development — a folder marketplace keeps reading this checkout, so edits apply
+on the next start without reinstalling. Validate first; Claude Code rejects the whole
+module when validation fails:
 
 ```sh
-CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .
+npm run validate:plugin
+claude plugin marketplace remove fast-jev-compaction   # only if it points at GitHub
+claude plugin marketplace add .
+claude plugin install fast-jev-compaction@fast-jev-compaction
+```
+
+Or load it without installing:
+
+```sh
+CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir ./packages/claude-code
 ```
 
 ## Configuration
@@ -51,7 +62,13 @@ The plugin declares these `userConfig` values in
 `.claude-plugin/plugin.json`:
 
 | Option | Default |
-| --- | ---: |
+| --- | --- |
+| `apiKey` | unset → key chain below (sensitive) |
+| `backend` | `typesafe` |
+| `model` | `jev-latest` (`clef` / `clef-flash` for Cloudflare) |
+| `accountId` | unset → `CLOUDFLARE_ACCOUNT_ID` |
+| `baseUrl` | unset → provider default |
+| `goal` | empty (no task hint) |
 | `keepThreshold` | `0.5` |
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
@@ -59,28 +76,52 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
-| `model` | `jev-latest` |
-| `accountId` | `CLOUDFLARE_ACCOUNT_ID` |
-| `baseUrl` | (empty, uses provider default) |
+
+`backend` selects the provider (`typesafe` or `cloudflare`); `model`, `accountId` and
+the key chain follow from it, and an unsupported combination (for example a Clef model
+with `backend: "typesafe"`, or a Clef model without `accountId`) fails with a clear error
+that falls back to the built-in summary. Omitting `backend` infers it from
+`model` / `baseUrl` / `accountId`, so older configurations keep working.
 
 The API key or token can be supplied as the sensitive `apiKey` plugin option or
 through environment variables (`TYPESAFE_API_KEY` for TypeSafe, or `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_AUTH_TOKEN` for Cloudflare Workers AI). For Clef, set `model` to `@cf/cloudflare/clef`
-(or `clef`) and ensure `CLOUDFLARE_ACCOUNT_ID` is set. Environment variables are the recommended
+`CLOUDFLARE_AUTH_TOKEN` for Cloudflare Workers AI). The hook reads the process
+environment first and the `env` block of `~/.claude/settings.json` second, so a token that
+is only set in the settings file still works. For Clef, set `backend` to `cloudflare`,
+`model` to `@cf/cloudflare/clef` (or `clef`) and ensure `CLOUDFLARE_ACCOUNT_ID` is set.
+`baseUrl` is a complete endpoint URL used verbatim. Environment variables are the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
-`model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
-the response is malformed, the key is unavailable, the history cannot be
-fitted into the state budget, or the estimated reduction is below
-`minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
-built-in compaction. The outcome is shown as a toast and logged with the
-reduction, per-reason counts, state size and request count; a per-call
-`decisions:` line with both probabilities is logged for diagnosis. The
-`turn.complete` hook requests
-compaction when `context.percent` reaches `compactAtPercent`, with an
-in-flight guard.
+### Setting the options
+
+Outside Claude Code:
+
+```sh
+claude plugin configure fast-jev-compaction@fast-jev-compaction --values-stdin <<'JSON'
+{"backend":"cloudflare","model":"clef-flash","accountId":"<account-id>"}
+JSON
+```
+
+Inside Claude Code, run `/plugin configure fast-jev-compaction@fast-jev-compaction`.
+`claude plugin configure <plugin> --json` shows the schema, the current inputs, and which
+options are still unset.
+
+Claude Code saves every option as a string and hands unset options over as `""`.
+Numeric options therefore accept `"45"`, and an empty string falls back to the default
+instead of becoming `0`.
+
+`keepThreshold`, `preserveRecentMessages`, `maxStateTokens`, `maxRequestTokens` and
+`truncateHeadChars` are passed straight to the library; `backend`, `model`, `accountId`,
+`baseUrl`, `apiKey`, `goal`, `compactAtPercent` and `minReductionRatio` are handled by the
+hook itself. See the root README for what the library options do.
+
+The `session.compact` hook runs the Jev requests concurrently. If Jev fails, the response
+is malformed, the key is unavailable, the history cannot be fitted into the state budget, or
+the estimated reduction is below `minReductionRatio`, the hook logs a fallback and delegates
+to Claude Code's built-in compaction. The outcome is shown as a toast and logged with the
+reduction, per-reason counts, state size and request count; a per-call `decisions:` line
+with both probabilities is logged for diagnosis. The `turn.complete` hook requests
+compaction when `context.percent` reaches `compactAtPercent`, with an in-flight guard.
 
 ## Scope and caveat
 
@@ -88,6 +129,17 @@ Function hooks are early access and may change between Claude Code releases.
 This mod uses the generated declarations from 2.1.274 in
 `types/claude-code.d.ts`; regenerate and review that file after a
 Claude Code upgrade.
+
+Check a change with `npm run validate:plugin` before installing from a checkout —
+Claude Code rejects the whole module if validation fails. Two constraints bite when editing
+`fast-jev.ts`:
+
+- `$.env.get` and the other `$.noun.method` handles only accept **literal** arguments, so a
+  dynamic loop such as `for (const name of keyEnvs) await $.env.get(name)` fails to compile.
+  Read each candidate variable with a literal name, then pick by order.
+- The hook module is expected to gate every hook with a `.catch`; `session.compact` is
+  reported as a note, not an error, because it handles its own failures and always
+  delegates with `next(event)`.
 
 References:
 

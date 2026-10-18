@@ -33,7 +33,8 @@ const result = await compactMessages(transcript, { preserveRecentMessages: 4 });
 
 // Or using Cloudflare Workers AI Clef:
 // const result = await compactMessages(transcript, {
-//   model: '@cf/cloudflare/clef', // or 'clef', or 'clef-flash'
+//   backend: 'cloudflare',
+//   model: 'clef', // or 'clef-flash', '@cf/cloudflare/clef'
 //   accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
 //   apiKey: process.env.CLOUDFLARE_API_TOKEN,
 //   preserveRecentMessages: 4,
@@ -41,6 +42,15 @@ const result = await compactMessages(transcript, { preserveRecentMessages: 4 });
 
 console.log(result.messages, result.decisions, result.stats);
 ```
+
+## Backend selection
+
+`resolveEndpoint({ backend, model, baseUrl, accountId })` returns the one
+`{ backend, url, bodyModel, keyEnvs }` that every client, request builder and
+integration uses. `backend` is `typesafe` (default) or `cloudflare`; an
+unsupported combination throws instead of silently calling the wrong API.
+`baseUrl` is always a complete endpoint URL used verbatim. When `backend` is
+omitted it is inferred from `model` / `baseUrl` / `accountId`.
 
 ## License
 

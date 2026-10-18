@@ -76,6 +76,31 @@ describe('hook config', () => {
       minReductionRatio: 0.25,
     });
   });
+
+  it('accepts the numeric strings Claude Code stores userConfig values as', () => {
+    const config = resolveHookConfig({
+      backend: 'cloudflare',
+      model: 'clef-flash',
+      compactAtPercent: '45',
+      keepThreshold: '0.3',
+      preserveRecentMessages: '2',
+    });
+    expect(config).toMatchObject({
+      backend: 'cloudflare',
+      model: 'clef-flash',
+      compactAtPercent: 45,
+      keepThreshold: 0.3,
+      preserveRecentMessages: 2,
+    });
+  });
+
+  it('treats an unset (empty string) number as not configured', () => {
+    expect(resolveHookConfig({ compactAtPercent: '', maxStateTokens: '', preserveRecentMessages: '  ' })).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+    });
+  });
 });
 
 describe('session message mapping', () => {

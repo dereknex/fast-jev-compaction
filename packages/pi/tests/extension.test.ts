@@ -97,6 +97,7 @@ interface HarnessOptions {
   delay?: Promise<void>;
   existingEntries?: SessionEntry[];
   minReductionRatio?: number;
+  configError?: string;
 }
 
 function createHarness(options: HarnessOptions = {}): FakeHarness {
@@ -184,12 +185,15 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
   };
 
   installFastJevCompaction(pi as unknown as ExtensionAPI, {
-    loadConfig: async () => ({
-      ...DEFAULT_CONFIG,
-      apiKeyCommand: 'generic-command',
-      preserveRecentMessages: 0,
-      minReductionRatio: options.minReductionRatio ?? 0.1,
-    }),
+    loadConfig: async () => {
+      if (options.configError) throw new Error(options.configError);
+      return {
+        ...DEFAULT_CONFIG,
+        apiKeyCommand: 'generic-command',
+        preserveRecentMessages: 0,
+        minReductionRatio: options.minReductionRatio ?? 0.1,
+      };
+    },
     createAsker: () => asker,
     keyResolver: {
       resolve: async () => {
@@ -219,6 +223,16 @@ async function start(harness: FakeHarness, reason = 'startup'): Promise<void> {
 }
 
 describe('Pi extension wiring', () => {
+  it('disables pruning with a visible reason when the config cannot resolve', async () => {
+    const harness = createHarness({
+      configError: 'model "clef-flash" is a Clef model; set backend "cloudflare"',
+    });
+    await start(harness);
+    await harness.emit('turn_end');
+    expect(harness.appended).toHaveLength(0);
+    expect(JSON.stringify(harness.notify.mock.calls)).toContain('fast-jev: disabled');
+  });
+
   it('runs proactively above the threshold, persists a ledger, and honors cooldown', async () => {
     const harness = createHarness();
     await start(harness);
