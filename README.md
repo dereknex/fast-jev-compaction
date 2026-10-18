@@ -451,3 +451,28 @@ npm run validate:plugin  # validates Claude Code plugin manifest
 ```
 
 All test suites run completely offline with mocked providers and zero external network calls.
+
+---
+
+## Release & Versioning
+
+This repository uses [Changesets](https://github.com/changesets/changesets) along with GitHub Actions and [npm Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) to automate package releases and provenance attestations without storing static `NPM_TOKEN` secrets.
+
+### Adding a Changeset
+
+When submitting changes that should be released:
+
+```sh
+npm run changeset
+```
+
+1. Select the packages to bump (`fast-jev-compaction`, `pi-fast-jev-compaction`).
+2. Choose the bump type (`patch`, `minor`, `major`).
+3. Enter a concise summary of the change.
+4. Commit the generated file in `.changeset/`.
+
+### Automated Publishing Workflow
+
+1. Merging a PR containing a changeset into `main` automatically triggers the [Release workflow](.github/workflows/release.yml), which creates or updates a **"Version Packages"** PR.
+2. Merging the **"Version Packages"** PR triggers the automated build, package publishing to the npm registry with cryptographic provenance via Trusted Publisher, git tagging, and GitHub Releases.
+

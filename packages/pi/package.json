@@ -13,6 +13,15 @@
   ],
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dereknex/fast-jev-compaction.git",
+    "directory": "packages/pi"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "engines": {
     "node": ">=18"
   },
@@ -35,7 +44,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "fast-jev-compaction": "*",
+    "fast-jev-compaction": "^0.4.1",
     "xstate": "^5.33.2"
   },
   "peerDependencies": {

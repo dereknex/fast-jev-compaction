@@ -5,6 +5,10 @@
   "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model and Cloudflare Workers AI Clef.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dereknex/fast-jev-compaction.git"
+  },
   "workspaces": [
     "packages/*"
   ],
@@ -14,9 +18,14 @@
     "typecheck": "npm run --workspaces --if-present typecheck",
     "test": "vitest run",
     "demo": "tsx examples/demo.ts",
-    "validate:plugin": "claude plugin validate packages/claude-code/.claude-plugin/plugin.json"
+    "validate:plugin": "claude plugin validate packages/claude-code/.claude-plugin/plugin.json",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "npm run build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^1.0.1",
+    "@changesets/cli": "^3.0.3",
     "@earendil-works/pi-agent-core": "^1.3.0",
     "@earendil-works/pi-ai": "^1.3.0",
     "@earendil-works/pi-coding-agent": "^1.3.0",
