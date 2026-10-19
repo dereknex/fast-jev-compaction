@@ -1,4 +1,4 @@
-# pi-fast-jev-compaction (Pi Extension & Package)
+# @dereknex/pi-jev-compaction (Pi Extension & Package)
 
 Continuous, verbatim context pruning extension for the [Pi coding agent](https://github.com/badlogic/pi-mono), powered by TypeSafe Jev and Cloudflare Workers AI Clef.
 
@@ -13,13 +13,13 @@ Continuous, verbatim context pruning extension for the [Pi coding agent](https:/
 ## Installation
 
 ```sh
-pi install pi-fast-jev-compaction
+pi install @dereknex/pi-jev-compaction
 ```
 
 Or run directly from a local clone:
 
 ```sh
-pi -e ./packages/pi/extensions/pi-fast-jev-compaction.ts
+pi -e ./packages/pi/extensions/pi-jev-compaction.ts
 ```
 
 ## Configuration

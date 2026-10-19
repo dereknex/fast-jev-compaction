@@ -1,4 +1,4 @@
-# fast-jev-compaction (Core Library)
+# @dereknex/jev-compaction (Core Library)
 
 Continuous, verbatim context compaction engine for LLM agents using TypeSafe's Jev model and Cloudflare Workers AI Clef.
 
@@ -10,13 +10,13 @@ This package provides the core algorithms and clients with zero heavy dependenci
 ## Installation
 
 ```sh
-npm install fast-jev-compaction
+npm install @dereknex/jev-compaction
 ```
 
 ## Usage
 
 ```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
+import { compactMessages, reductionRatio, type Message } from '@dereknex/jev-compaction';
 
 const transcript: Message[] = [
   { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },

@@ -1,7 +1,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai';
 
-import type { Message } from 'fast-jev-compaction';
+import type { Message } from '@dereknex/jev-compaction';
 
 function textFromContent(
   content: string | (TextContent | ImageContent)[],

@@ -28,8 +28,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22 # Node >= 22.14.0 bundled with npm >= 11.5.1 provides native OIDC support
+          node-version: 22
           cache: 'npm'
+
+      # Node 22.x ships npm 10.x; OIDC trusted publishing needs npm >= 11.5.1
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@^11.5.1
 
       - name: Install dependencies
         run: npm ci

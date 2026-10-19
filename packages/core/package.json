@@ -1,5 +1,5 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "@dereknex/jev-compaction",
   "version": "0.4.1",
   "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model and Cloudflare Workers AI Clef.",
   "type": "module",

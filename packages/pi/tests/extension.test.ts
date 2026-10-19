@@ -14,9 +14,9 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { describe, expect, it, vi } from 'vitest';
 
-import { installFastJevCompaction } from '../extensions/pi-fast-jev-compaction.js';
+import { installFastJevCompaction } from '../extensions/pi-jev-compaction.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import type { JevAsker, JevQuestions } from 'fast-jev-compaction';
+import type { JevAsker, JevQuestions } from '@dereknex/jev-compaction';
 import { DECISION_ENTRY_TYPE } from '../src/ledger.js';
 
 const usage: Usage = {

@@ -3,9 +3,9 @@
 Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model and Cloudflare Workers AI Clef.
 
 This repository is organized as a monorepo containing:
-- **[`packages/core`](packages/core)** (`fast-jev-compaction`): Standalone, lightweight npm library containing the core decision and state-fitting algorithms.
+- **[`packages/core`](packages/core)** (`@dereknex/jev-compaction`): Standalone, lightweight npm library containing the core decision and state-fitting algorithms.
 - **[`packages/claude-code`](packages/claude-code)** (`fast-jev-claude-code`): Function-hook plugin for [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code).
-- **[`packages/pi`](packages/pi)** (`pi-fast-jev-compaction`): Extension and package for the [Pi coding agent](https://github.com/badlogic/pi-mono).
+- **[`packages/pi`](packages/pi)** (`@dereknex/pi-jev-compaction`): Extension and package for the [Pi coding agent](https://github.com/badlogic/pi-mono).
 
 ---
 
@@ -48,13 +48,13 @@ npm install /path/to/fast-jev-compaction/packages/core
 
 # Option B: Link via npm link
 cd /path/to/fast-jev-compaction/packages/core && npm link
-cd /path/to/your-project && npm link fast-jev-compaction
+cd /path/to/your-project && npm link @dereknex/jev-compaction
 ```
 
 #### Usage
 
 ```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
+import { compactMessages, reductionRatio, type Message } from '@dereknex/jev-compaction';
 
 // Using TypeSafe Jev (default, requires TYPESAFE_API_KEY):
 const result = await compactMessages(transcript, {
@@ -174,7 +174,7 @@ Install or load the extension directly from this repository checkout:
 pi install ./packages/pi
 
 # Option B: Load extension directly from checkout
-pi -e ./packages/pi/extensions/pi-fast-jev-compaction.ts
+pi -e ./packages/pi/extensions/pi-jev-compaction.ts
 ```
 
 #### 2. Configuration (`~/.pi/agent/settings.json` or `.pi/settings.json`)
@@ -309,7 +309,7 @@ Or securely retrieve it via dynamic command (e.g. 1Password CLI):
 
 #### 3. Core Library (`packages/core`)
 ```ts
-import { compactMessages, JevClient } from 'fast-jev-compaction';
+import { compactMessages, JevClient } from '@dereknex/jev-compaction';
 
 // Using compactMessages (defaults to Jev and process.env.TYPESAFE_API_KEY):
 const result = await compactMessages(transcript, {
@@ -399,7 +399,7 @@ Or securely retrieve it via dynamic command (e.g. 1Password CLI):
 
 #### 3. Core Library (`packages/core`)
 ```ts
-import { compactMessages, JevClient } from 'fast-jev-compaction';
+import { compactMessages, JevClient } from '@dereknex/jev-compaction';
 
 // Using compactMessages with Clef:
 const result = await compactMessages(transcript, {
@@ -466,7 +466,7 @@ When submitting changes that should be released:
 npm run changeset
 ```
 
-1. Select the packages to bump (`fast-jev-compaction`, `pi-fast-jev-compaction`).
+1. Select the packages to bump (`@dereknex/jev-compaction`, `@dereknex/pi-jev-compaction`).
 2. Choose the bump type (`patch`, `minor`, `major`).
 3. Enter a concise summary of the change.
 4. Commit the generated file in `.changeset/`.
@@ -475,4 +475,15 @@ npm run changeset
 
 1. Merging a PR containing a changeset into `main` automatically triggers the [Release workflow](.github/workflows/release.yml), which creates or updates a **"Version Packages"** PR.
 2. Merging the **"Version Packages"** PR triggers the automated build, package publishing to the npm registry with cryptographic provenance via Trusted Publisher, git tagging, and GitHub Releases.
+
+### One-Time Bootstrap
+
+A trusted publisher can only be attached to a package that already exists on npm, and CI cannot publish until that trust is in place. Run the guided bootstrap once for a new package name (and once per npm account taking over releases):
+
+```sh
+npm install -g npm@^11.15.0   # `npm trust` needs this locally
+bash scripts/setup-release.sh
+```
+
+It builds and tests, publishes any workspace version that is missing from the registry with your own npm login, then registers `.github/workflows/release.yml` as a trusted publisher for each published package. Requirements: npm write access to the packages and 2FA enabled on the npm account. After that, every release goes through OIDC as described above.
 

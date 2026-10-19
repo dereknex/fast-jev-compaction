@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveEndpoint } from 'fast-jev-compaction';
+import { resolveEndpoint } from '@dereknex/jev-compaction';
 
 import { DEFAULT_CONFIG, parseConfig } from '../src/config.js';
 import { createKeyResolver } from '../src/key.js';

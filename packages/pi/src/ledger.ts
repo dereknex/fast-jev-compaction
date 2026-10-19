@@ -2,7 +2,7 @@ import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { TextContent } from '@earendil-works/pi-ai';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 
-import type { CallAction, CallDecision, DecisionStats } from 'fast-jev-compaction';
+import type { CallAction, CallDecision, DecisionStats } from '@dereknex/jev-compaction';
 
 export const DECISION_ENTRY_TYPE = 'fast-jev-decisions';
 

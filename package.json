@@ -13,7 +13,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run --workspace=fast-jev-compaction build && npm run sync:claude && npm run --workspace=pi-fast-jev-compaction build",
+    "build": "npm run --workspace=@dereknex/jev-compaction build && npm run sync:claude && npm run --workspace=@dereknex/pi-jev-compaction build",
     "sync:claude": "node scripts/sync-claude.js",
     "typecheck": "npm run --workspaces --if-present typecheck",
     "test": "vitest run",

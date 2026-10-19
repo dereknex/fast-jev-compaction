@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
-import { missingKeyMessage, resolveEndpoint } from 'fast-jev-compaction';
+import { missingKeyMessage, resolveEndpoint } from '@dereknex/jev-compaction';
 
 export interface KeyResolutionContext {
   backend?: 'typesafe' | 'cloudflare';

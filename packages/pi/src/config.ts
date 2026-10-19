@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { CONFIG_DIR_NAME, getAgentDir } from '@earendil-works/pi-coding-agent';
 
-import { DEFAULT_MODEL, resolveEndpoint, type JevBackend } from 'fast-jev-compaction';
+import { DEFAULT_MODEL, resolveEndpoint, type JevBackend } from '@dereknex/jev-compaction';
 
 export interface FastJevConfig {
   enabled: boolean;

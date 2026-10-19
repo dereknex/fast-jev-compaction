@@ -14,7 +14,7 @@ import {
   type DecisionResult,
   type JevAsker,
   type JevClientOptions,
-} from 'fast-jev-compaction';
+} from '@dereknex/jev-compaction';
 
 import { adaptMessages } from '../src/adapter.js';
 import {
