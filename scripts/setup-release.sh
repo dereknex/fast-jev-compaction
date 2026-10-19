@@ -219,18 +219,19 @@ is_published() {
   npm view "$1" version >/dev/null 2>&1
 }
 
-# trust_state PKG: "publish" | "stage" | "none" for this repo + release workflow.
-# Configs created after 2026-09-03 default to stage publish only, which makes CI's
-# `npm publish` fail with E403 "OIDC permission denied for this action".
+# trust_state PKG: prints "publish|<id>", "stage|<id>" or "none|" for this repo +
+# release workflow. Configs created after 2026-09-03 default to stage publish only,
+# which makes CI's `npm publish` fail with E403 "OIDC permission denied for this action".
 trust_state() {
-  local out
-  out=$(npm trust list "$1" --json 2>/dev/null) || { printf 'none'; return; }
+  local out id
+  out=$(npm trust list "$1" --json 2>/dev/null) || { printf 'none|'; return; }
   if ! printf '%s' "$out" | grep -Eq "\"repository\": *\"$REPO_SLUG\"" ||
      ! printf '%s' "$out" | grep -Eq "\"file\": *\"$WORKFLOW_FILE\""; then
-    printf 'none'
+    printf 'none|'
     return
   fi
-  if printf '%s' "$out" | grep -q '"createPackage"'; then printf 'publish'; else printf 'stage'; fi
+  id=$(printf '%s' "$out" | grep -o '"id": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+  if printf '%s' "$out" | grep -q '"createPackage"'; then printf 'publish|%s' "$id"; else printf 'stage|%s' "$id"; fi
 }
 
 banner "fast-jev-compaction: first publish → trusted publisher"
@@ -338,18 +339,28 @@ say "Registers this repo's release workflow so CI can publish via OIDC, with no"
 say "NPM_TOKEN: $REPO_SLUG → .github/workflows/$WORKFLOW_FILE"
 for spec in "${PUBLISHABLE[@]}"; do
   name="${spec%@*}"
-  state=$(trust_state "$name")
+  IFS='|' read -r state trust_id <<< "$(trust_state "$name")"
   if [[ "$state" == "publish" ]]; then
     say "$name trusts $REPO_SLUG/$WORKFLOW_FILE with npm publish — skipping."
     continue
   fi
   if [[ "$state" == "stage" ]]; then
-    warn "$name only allows this workflow to stage-publish; CI runs 'npm publish'"
-    open_url "https://www.npmjs.com/package/$name/access"
-    step "Edit the GitHub Actions trusted publisher and enable 'npm publish'."
-    step "Or revoke it (npm trust list $name) and re-add with --allow-publish."
-    pause "Press Enter once $name allows npm publish"
-    if [[ "$(trust_state "$name")" == "publish" ]]; then
+    warn "$name only allows this workflow to stage-publish; CI runs 'npm publish' (E403)"
+    if [[ -n "$trust_id" ]] && confirm "Replace the trusted publisher for $name (revoke + re-add with --allow-publish)?"; then
+      if npm trust revoke "$name" --id="$trust_id" &&
+         npm trust github "$name" --repo "$REPO_SLUG" --file "$WORKFLOW_FILE" --allow-publish -y; then
+        IFS='|' read -r state trust_id <<< "$(trust_state "$name")"
+      else
+        warn "$name: revoke/re-add failed"
+        state=failed
+      fi
+    else
+      open_url "https://www.npmjs.com/package/$name/access"
+      step "Remove the GitHub Actions entry, re-add it with 'npm publish' enabled."
+      pause "Press Enter once $name allows npm publish"
+      IFS='|' read -r state trust_id <<< "$(trust_state "$name")"
+    fi
+    if [[ "$state" == "publish" ]]; then
       say "$name trusted ✓ (publish allowed)"
     else
       SKIPPED+=("npm publish permission for $name")
@@ -358,7 +369,7 @@ for spec in "${PUBLISHABLE[@]}"; do
   fi
   if confirm "Add trusted publisher for $name?"; then
     if npm trust github "$name" --repo "$REPO_SLUG" --file "$WORKFLOW_FILE" --allow-publish -y &&
-       [[ "$(trust_state "$name")" == "publish" ]]; then
+       [[ "$(trust_state "$name")" == publish* ]]; then
       say "$name trusted ✓ (publish allowed)"
     else
       warn "$name: trusted publisher was not created (2FA enabled on the account?)"
