@@ -509,3 +509,19 @@ npm trust list @dereknex/jev-compaction   # must report publish (createPackage) 
 
 Repeat for `@dereknex/pi-jev-compaction`. `scripts/setup-release.sh` runs the same check and offers the revoke/re-add when it finds a stage-only entry.
 
+### Expired Trusted Publisher
+
+The same `E403` has a second cause. A newly created trusted publisher must complete its **first successful publish within 2 days**; that publish is what binds the configuration to the repository's immutable identity. A configuration that never got there expires, and `npm trust list` cannot tell you: the entry and its permissions still read as correct.
+
+Delete and recreate it, then trigger the release immediately — the fresh entry is on the same 2-day clock, and a re-run of the failed Release workflow is its first successful publish:
+
+```sh
+npm trust list @dereknex/pi-jev-compaction   # note the id
+npm trust revoke @dereknex/pi-jev-compaction --id=<id>
+npm trust github @dereknex/pi-jev-compaction --repo dereknex/fast-jev-compaction --file release.yml --allow-publish -y
+gh run list --workflow=release.yml --limit 1 # grab the failing run id
+gh run rerun <run-id> --failed
+```
+
+Repeat per package, then re-run right away. Once one release succeeds through a recreated entry it is bound, and it stops expiring.
+
