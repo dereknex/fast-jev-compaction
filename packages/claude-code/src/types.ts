@@ -122,6 +122,13 @@ export interface ResolvedCompactOptions {
   truncateHeadChars: number;
 }
 
+export interface DecisionProgress {
+  stage: 'fitting' | 'batching' | 'requesting' | 'deciding';
+  stateTokens?: number;
+  stateStage?: string;
+  batches?: number;
+}
+
 export interface DecisionStats {
   calls: number;
   kept: number;

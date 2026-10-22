@@ -10,7 +10,9 @@ import { Text } from '@earendil-works/pi-tui';
 import {
   collectToolCalls,
   decide,
+  inferBackend,
   JevClient,
+  type DecisionProgress,
   type DecisionResult,
   type JevAsker,
   type JevClientOptions,
@@ -22,6 +24,11 @@ import {
   loadConfig,
   type FastJevConfig,
 } from '../src/config.js';
+import {
+  DIAGNOSTIC_ENTRY_TYPE,
+  errorSummary,
+  type DiagnosticEntryData,
+} from '../src/diagnostics.js';
 import { createKeyResolver, type KeyResolver } from '../src/key.js';
 import {
   applyLedger,
@@ -50,7 +57,7 @@ interface AppliedRun {
 }
 
 interface SkippedRun {
-  outcome: 'skipped' | 'failed';
+  outcome: 'skipped' | 'failed' | 'cancelled';
 }
 
 type RunResult = AppliedRun | SkippedRun;
@@ -114,13 +121,30 @@ export function installFastJevCompaction(
     messages: readonly AgentMessage[],
     tokens: number,
     mode: RunMode,
-    signal: AbortSignal | undefined,
+    upstreamSignal: AbortSignal | undefined,
     force = false,
   ): Promise<RunResult> => {
     if (!enabled || !lifecycle.begin(tokens, mode, force))
       return { outcome: 'skipped' };
+    const controller = new AbortController();
+    activeController = controller;
+    const signals = [...new Set([upstreamSignal, ctx.signal])].filter(
+      (value): value is AbortSignal => value !== undefined,
+    );
+    const abort = (): void => controller.abort();
+    for (const source of signals) {
+      source.addEventListener('abort', abort, { once: true });
+      if (source.aborted) abort();
+    }
+    const signal = controller.signal;
+    const started = Date.now();
+    let progress: Pick<DiagnosticEntryData, 'stage' | 'stateTokens' | 'stateStage' | 'batches'> = { stage: 'preparing' };
+    let apiKey = '';
+    const onProgress = (next: DecisionProgress): void => {
+      progress = next;
+    };
     try {
-      signal?.throwIfAborted();
+      signal.throwIfAborted();
       const adapted = adaptMessages(
         applyLedger(messages, ledger, config.truncateHeadChars),
       );
@@ -129,32 +153,20 @@ export function installFastJevCompaction(
           (call) => !call.pinned,
         )
       ) {
-        const apiKey = await resolveKey.resolve(config.apiKeyCommand, signal, {
+        progress = { stage: 'key' };
+        apiKey = await resolveKey.resolve(config.apiKeyCommand, signal, {
           backend: config.backend,
           model: config.model,
           baseUrl: config.baseUrl,
           accountId: config.accountId,
         });
-        signal?.throwIfAborted();
-        const result = await decide(
-          adapted,
-          createAsker({
-            apiKey,
-            backend: config.backend,
-            model: config.model,
-            baseUrl: config.baseUrl,
-            accountId: config.accountId,
-          }),
-          config,
-          signal,
-        );
-        signal?.throwIfAborted();
-        return persistRun(ctx, messages, result);
+        signal.throwIfAborted();
       }
+      progress = { stage: 'client' };
       const result = await decide(
         adapted,
         createAsker({
-          apiKey: '',
+          apiKey,
           backend: config.backend,
           model: config.model,
           baseUrl: config.baseUrl,
@@ -162,15 +174,48 @@ export function installFastJevCompaction(
         }),
         config,
         signal,
+        onProgress,
       );
+      signal.throwIfAborted();
+      progress = { ...progress, stage: 'persisting' };
       return persistRun(ctx, messages, result);
-    } catch {
-      lifecycle.finish('failed');
-      ctx.ui.notify(
-        'fast-jev: decision failed; falling back to Pi compaction',
-        'warning',
-      );
-      return { outcome: 'failed' };
+    } catch (error) {
+      const cancelled = signal.aborted ||
+        (error instanceof Error && error.name === 'AbortError');
+      const outcome = cancelled ? 'cancelled' : 'failed';
+      if (cancelled) {
+        if (lifecycle.isDeciding()) lifecycle.abort();
+      } else lifecycle.finish('failed');
+      const entry: DiagnosticEntryData = {
+        version: 1,
+        outcome,
+        backend: inferBackend(config),
+        model: config.model,
+        mode,
+        ...progress,
+        ms: Date.now() - started,
+      };
+      if (!cancelled) {
+        entry.error = errorSummary(error, [
+          apiKey,
+          config.apiKeyCommand ?? '',
+          ...['TYPESAFE_API_KEY', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_AUTH_TOKEN']
+            .map((name) => process.env[name]?.trim() ?? ''),
+        ]);
+      }
+      pi.appendEntry(DIAGNOSTIC_ENTRY_TYPE, entry);
+      if (!cancelled) {
+        ctx.ui.notify(
+          `fast-jev: decision failed: ${entry.error?.message}; ${mode === 'compaction'
+            ? 'falling back to Pi compaction'
+            : 'no pruning applied'}`,
+          'warning',
+        );
+      }
+      return { outcome };
+    } finally {
+      for (const source of signals) source.removeEventListener('abort', abort);
+      if (activeController === controller) activeController = undefined;
     }
   };
 
@@ -264,19 +309,15 @@ export function installFastJevCompaction(
   pi.on('turn_end', async (_event, ctx) => {
     const usage = ctx.getContextUsage();
     if (!enabled || usage?.percent === null || usage?.tokens === null) return;
+    if (lifecycle.isDeciding()) return;
     if (usage === undefined || usage.percent < config.compactAtPercent) return;
-    activeController = new AbortController();
-    try {
-      await runDecision(
-        ctx,
-        branchMessages(ctx),
-        usage.tokens,
-        'proactive',
-        activeController.signal,
-      );
-    } finally {
-      activeController = undefined;
-    }
+    await runDecision(
+      ctx,
+      branchMessages(ctx),
+      usage.tokens,
+      'proactive',
+      ctx.signal,
+    );
   });
 
   pi.on('session_before_compact', async (event, ctx) => {
@@ -289,10 +330,9 @@ export function installFastJevCompaction(
       event.signal,
       true,
     );
-    if (
-      run.outcome !== 'applied' ||
-      run.stats.reductionRatio < config.minReductionRatio
-    ) {
+    if (run.outcome === 'cancelled' || event.signal.aborted) return { cancel: true };
+    if (run.outcome !== 'applied') return fallbackCompaction();
+    if (run.stats.reductionRatio < config.minReductionRatio) {
       ctx.ui.notify(
         "fast-jev: reduction too small; using Pi's built-in summary",
         'warning',
@@ -324,27 +364,22 @@ export function installFastJevCompaction(
       if (action === 'off') {
         enabled = false;
         activeController?.abort();
-        lifecycle.abort();
         updateStatus(ctx);
         ctx.ui.notify('fast-jev: disabled for this session', 'info');
         return;
       }
       if (action === 'run') {
         await ctx.waitForIdle();
+        if (lifecycle.isDeciding()) return;
         const usage = ctx.getContextUsage();
-        activeController = new AbortController();
-        try {
-          await runDecision(
-            ctx,
-            branchMessages(ctx),
-            usage?.tokens ?? 0,
-            'manual',
-            activeController.signal,
-            true,
-          );
-        } finally {
-          activeController = undefined;
-        }
+        await runDecision(
+          ctx,
+          branchMessages(ctx),
+          usage?.tokens ?? 0,
+          'manual',
+          ctx.signal,
+          true,
+        );
         return;
       }
       const usage = ctx.getContextUsage();

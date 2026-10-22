@@ -207,6 +207,17 @@ export function buildJevRequest(
   };
 }
 
+/** Keeps response details available to callers without persisting them in diagnostics. */
+export class JevRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'JevRequestError';
+  }
+}
+
 /** Validates a Jev / Clef response body; throws on anything but an `answers` object. */
 export function parseJevResponse(
   status: number,
@@ -231,7 +242,7 @@ export function parseJevResponse(
     } catch {
       // not JSON, keep text slice
     }
-    throw new Error(`Jev request failed (${status}): ${detail}`);
+    throw new JevRequestError(`Jev request failed (${status}): ${detail}`, status);
   }
   let parsed: unknown;
   try {
@@ -246,7 +257,7 @@ export function parseJevResponse(
       const msg =
         errors?.map((e) => e.message).filter(Boolean).join('; ') ||
         'request unsuccessful';
-      throw new Error(`Jev request failed: ${msg}`);
+      throw new JevRequestError(`Jev request failed: ${msg}`, status);
     }
 
     if (

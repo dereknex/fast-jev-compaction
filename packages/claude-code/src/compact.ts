@@ -6,6 +6,7 @@ import type {
   CompactOptions,
   CompactResult,
   CompactionState,
+  DecisionProgress,
   DecisionResult,
   JevAsker,
   JevQuestions,
@@ -296,6 +297,7 @@ export async function decide(
   asker: JevAsker,
   options: CompactOptions = {},
   signal?: AbortSignal,
+  onProgress?: (progress: DecisionProgress) => void,
 ): Promise<DecisionResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
@@ -307,9 +309,13 @@ export async function decide(
   const answers = new Map<string, CallAnswer>();
   if (candidates.length > 0) {
     signal?.throwIfAborted();
+    onProgress?.({ stage: 'fitting' });
     const state = fitState(messages, calls, resolved);
     fitted = state;
+    const progress = { stateTokens: state.tokens, stateStage: state.stage };
+    onProgress?.({ stage: 'batching', ...progress });
     batches = batchCalls(candidates, state.tokens, resolved);
+    onProgress?.({ stage: 'requesting', ...progress, batches: batches.length });
     const answered = await Promise.all(
       batches.map((batch) => askBatch(asker, state.state, batch, signal)),
     );
@@ -317,6 +323,12 @@ export async function decide(
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }
 
+  onProgress?.({
+    stage: 'deciding',
+    stateTokens: fitted.tokens,
+    stateStage: fitted.stage,
+    batches: batches.length,
+  });
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
   );

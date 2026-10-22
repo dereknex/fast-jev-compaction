@@ -16,7 +16,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { installFastJevCompaction } from '../extensions/pi-jev-compaction.js';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import type { JevAsker, JevQuestions } from '@dereknex/jev-compaction';
+import { JevRequestError, type JevAsker, type JevQuestions } from '@dereknex/jev-compaction';
+import { DIAGNOSTIC_ENTRY_TYPE, type DiagnosticEntryData } from '../src/diagnostics.js';
 import { DECISION_ENTRY_TYPE } from '../src/ledger.js';
 
 const usage: Usage = {
@@ -98,6 +99,9 @@ interface HarnessOptions {
   existingEntries?: SessionEntry[];
   minReductionRatio?: number;
   configError?: string;
+  error?: unknown;
+  signal?: AbortSignal;
+  maxRequestTokens?: number;
 }
 
 function createHarness(options: HarnessOptions = {}): FakeHarness {
@@ -120,6 +124,7 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
   };
   const context = {
     cwd: process.cwd(),
+    signal: options.signal,
     getContextUsage: () => ({
       tokens: 70_000,
       contextWindow: 100_000,
@@ -172,6 +177,7 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
   const asker: JevAsker = {
     async ask(_state, questions: JevQuestions) {
       if (options.delay) await options.delay;
+      if ('error' in options) throw options.error;
       if (options.fail) throw new Error('TOPSECRET provider failure');
       return {
         answers: Object.fromEntries(
@@ -192,6 +198,7 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
         apiKeyCommand: 'generic-command',
         preserveRecentMessages: 0,
         minReductionRatio: options.minReductionRatio ?? 0.1,
+        maxRequestTokens: options.maxRequestTokens ?? DEFAULT_CONFIG.maxRequestTokens,
       };
     },
     createAsker: () => asker,
@@ -323,7 +330,14 @@ describe('Pi extension wiring', () => {
       signal: new AbortController().signal,
     });
     expect(failure).toBeUndefined();
-    expect(failed.appended).toHaveLength(0);
+    expect(failed.appended).toHaveLength(1);
+    expect(failed.appended[0]?.customType).toBe(DIAGNOSTIC_ENTRY_TYPE);
+    expect(failed.notify).toHaveBeenCalledTimes(1);
+    expect(failed.notify).toHaveBeenCalledWith(
+      expect.stringContaining('[redacted] provider failure; falling back to Pi compaction'),
+      'warning',
+    );
+    expect(JSON.stringify(failed.appended)).not.toContain('TOPSECRET');
     expect(JSON.stringify(failed.notify.mock.calls)).not.toContain('TOPSECRET');
 
     const missingKey = createHarness({ keyFail: true });
@@ -337,7 +351,12 @@ describe('Pi extension wiring', () => {
       signal: new AbortController().signal,
     });
     expect(missingKeyResult).toBeUndefined();
-    expect(missingKey.appended).toHaveLength(0);
+    expect(missingKey.appended).toHaveLength(1);
+    expect(missingKey.appended[0]?.data).toMatchObject({
+      outcome: 'failed', stage: 'key', error: { message: 'missing key' },
+    });
+    expect(missingKey.appended[0]?.data).not.toHaveProperty('batches');
+    expect(missingKey.appended[0]?.data).not.toHaveProperty('stateTokens');
 
     const low = createHarness({ answer: 0.9, minReductionRatio: 0.25 });
     await start(low);
@@ -351,6 +370,92 @@ describe('Pi extension wiring', () => {
     });
     expect(lowResult).toBeUndefined();
     expect(low.appended).toHaveLength(1);
+    expect(low.notify).toHaveBeenCalledWith(
+      expect.stringContaining('reduction too small'), 'warning',
+    );
+  });
+
+  it.each(['proactive', 'manual'] as const)('records HTTP failure statistics for %s without claiming a fallback', async (mode) => {
+    const harness = createHarness({
+      error: new JevRequestError('Jev request failed (429): private response TOPSECRET', 429),
+    });
+    await start(harness);
+    if (mode === 'manual') await harness.commands.get('fast-jev')?.('run', harness.context);
+    else await harness.emit('turn_end');
+    expect(harness.appended).toHaveLength(1);
+    expect(harness.appended[0]?.data).toMatchObject({
+      version: 1, outcome: 'failed', mode, stage: 'requesting', batches: 1,
+      backend: 'typesafe', model: 'jev-latest',
+      stateTokens: expect.any(Number), stateStage: expect.any(String), ms: expect.any(Number),
+      error: { type: 'JevRequestError', status: 429, message: 'Jev request failed (HTTP 429)' },
+    });
+    expect(harness.notify).toHaveBeenCalledTimes(1);
+    expect(harness.notify).toHaveBeenCalledWith(expect.stringContaining('no pruning applied'), 'warning');
+    expect(JSON.stringify([harness.appended, harness.notify.mock.calls])).not.toContain('private response');
+    expect(await harness.emit('context', { messages: transcript() })).toEqual({ messages: transcript() });
+    await harness.emit('turn_end');
+    expect(harness.appended).toHaveLength(1);
+  });
+
+  it('keeps fitted statistics when batching fails, leaving the batch count unknown', async () => {
+    const harness = createHarness({ maxRequestTokens: 1 });
+    await start(harness);
+    await harness.emit('turn_end');
+    expect(harness.appended[0]?.data).toMatchObject({
+      outcome: 'failed', stage: 'batching', stateTokens: expect.any(Number),
+    });
+    expect(harness.appended[0]?.data).not.toHaveProperty('batches');
+  });
+
+  it('records a pre-aborted compaction and cancels built-in compaction without warnings', async () => {
+    const harness = createHarness();
+    await start(harness);
+    const controller = new AbortController();
+    controller.abort('private cancellation reason');
+    expect(await harness.emit('session_before_compact', {
+      preparation: { tokensBefore: 70_000 }, branchEntries: [...harness.entries], signal: controller.signal,
+    })).toEqual({ cancel: true });
+    expect(harness.appended[0]?.data).toMatchObject({ outcome: 'cancelled', stage: 'preparing' });
+    expect(harness.appended[0]?.data).not.toHaveProperty('error');
+    expect(harness.notify).not.toHaveBeenCalled();
+    await harness.emit('turn_end');
+    expect(harness.appended[1]?.customType).toBe(DECISION_ENTRY_TYPE);
+  });
+
+  it.each(['off', 'session_shutdown', 'turn_abort'] as const)('records cancellation on %s even when the asker ignores the signal', async (action) => {
+    let release = noop;
+    const delay = new Promise<void>((resolve) => { release = resolve; });
+    const controller = new AbortController();
+    const harness = createHarness({ delay, signal: controller.signal });
+    await start(harness);
+    const running = harness.emit('turn_end');
+    // Let key resolution finish so the cancellation happens during the request.
+    await Promise.resolve();
+    if (action === 'off') await harness.commands.get('fast-jev')?.('off', harness.context);
+    else if (action === 'turn_abort') controller.abort();
+    else await harness.emit('session_shutdown');
+    release();
+    await running;
+    expect(harness.appended).toHaveLength(1);
+    const entry = harness.appended[0]?.data as DiagnosticEntryData;
+    expect(entry).toMatchObject({ outcome: 'cancelled', stage: 'requesting', batches: 1 });
+    expect(entry).not.toHaveProperty('error');
+    expect(harness.notify.mock.calls.filter((call) => call[1] === 'warning')).toHaveLength(0);
+    if (action === 'off') {
+      await harness.commands.get('fast-jev')?.('on', harness.context);
+      await harness.emit('turn_end');
+      expect(harness.appended[1]?.customType).toBe(DECISION_ENTRY_TYPE);
+    }
+  });
+
+  it('handles non-Error throws without persisting arbitrary objects', async () => {
+    const harness = createHarness({ error: { token: 'PRIVATE', request: transcript() } });
+    await start(harness);
+    await harness.emit('turn_end');
+    expect(harness.appended[0]?.data).toMatchObject({
+      error: { type: 'UnknownError', message: 'Unknown decision error' },
+    });
+    expect(JSON.stringify(harness.appended)).not.toContain('PRIVATE');
   });
 
   it('captures cacheRead and cacheWrite from the last assistant message', async () => {

@@ -8,7 +8,8 @@ Continuous, verbatim context pruning extension for the [Pi coding agent](https:/
 - **Append-only Ledger**: Pruning decisions are recorded as `fast-jev-decisions` custom entries in Pi's session history; the raw JSONL on disk is never modified.
 - **On-the-fly Filtering**: Modifies LLM context dynamically via Pi's `context` hook (`applyLedger`).
 - **Proactive & Threshold Compaction**: Runs at `turn_end` when context usage exceeds `compactAtPercent` (with cooldown guard), and hooks into `session_before_compact`.
-- **Fail-open Safety**: If an API call fails or reduction is insufficient, delegates transparently to Pi's built-in summary compaction.
+- **Fail-open Safety**: During Pi compaction, an API failure or insufficient reduction delegates to Pi's built-in summary. Proactive and manual failures leave pruning unchanged.
+- **Durable Diagnostics**: Failed and cancelled runs are recorded as `fast-jev-diagnostics` custom entries, separate from the decision ledger.
 
 ## Installation
 
@@ -72,6 +73,23 @@ configs keep loading, but setting it explicitly is recommended.
 - `/fast-jev`: Show current ledger status and statistics.
 - `/fast-jev run`: Force a decision run immediately.
 - `/fast-jev on` / `/fast-jev off`: Enable or disable for the current session.
+
+## Failure diagnostics
+
+Inspect `fast-jev-diagnostics` custom entries in the session JSONL after a failure.
+Each entry records `outcome` (`failed` or `cancelled`), backend, model, trigger mode,
+execution stage, and elapsed milliseconds. Fitted state tokens, state fitting stage,
+and planned batch count are included once known; missing fields mean they had not
+been calculated. Batch count describes planned batches, not successful responses.
+
+Failures also record an error type, a redacted message limited to 300 characters,
+and HTTP status when available. HTTP response bodies, stacks, credentials, and
+request payloads are excluded. Notifications show the same brief reason and only
+claim a Pi fallback when the run was triggered by Pi compaction. Cancellation is
+recorded without a failure warning, does not advance the cooldown, and cancels
+built-in compaction when encountered in the compaction hook.
+
+Requests retain their existing concurrency and are not automatically retried.
 
 ## License
 

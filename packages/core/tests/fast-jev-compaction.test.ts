@@ -8,6 +8,7 @@ import {
   collectToolCalls,
   compact,
   compactMessages,
+  decide,
   decideCall,
   estimateTokens,
   fitState,
@@ -21,6 +22,7 @@ import {
   reductionRatio,
   resolveEndpoint,
   resolveOptions,
+  type DecisionProgress,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -78,6 +80,28 @@ const fit = {
   preserveRecentMessages: 0,
   goal: 'fix the test',
 };
+
+describe('decision progress', () => {
+  it('reports accurate batches and fitted state before concurrent requests fail', async () => {
+    const messages = [message('user', 'Inspect files.')];
+    for (let i = 0; i < 65; i += 1) {
+      messages.push(call(`call-${i}`, 'Read', { path: `${i}.ts` }, 'content'));
+      messages.push(result(`call-${i}`, 'content'));
+    }
+    const progress: DecisionProgress[] = [];
+    let requests = 0;
+    const failure = new Error('transport failed');
+    await expect(decide(messages, {
+      async ask() { requests += 1; throw failure; },
+    }, fit, undefined, (next) => progress.push(next))).rejects.toBe(failure);
+    expect(requests).toBe(3);
+    expect(progress.map((next) => next.stage)).toEqual(['fitting', 'batching', 'requesting']);
+    expect(progress[0]).not.toHaveProperty('stateTokens');
+    expect(progress[1]).not.toHaveProperty('batches');
+    expect(progress[2]).toMatchObject({ batches: requests, stateTokens: expect.any(Number) });
+    expect(progress[2]?.stateTokens).toBeGreaterThan(0);
+  });
+});
 
 describe('options', () => {
   it('fills in defaults and ignores non-finite values', () => {
@@ -413,6 +437,9 @@ describe('HTTP client', () => {
 
   it('rejects failed and malformed responses', () => {
     expect(() => parseJevResponse(500, false, 'boom')).toThrow(/500/);
+    expect(() => parseJevResponse(429, false, 'rate limited')).toThrow(
+      expect.objectContaining({ name: 'JevRequestError', status: 429 }),
+    );
     expect(() => parseJevResponse(200, true, 'not json')).toThrow(/malformed/);
     expect(() => parseJevResponse(200, true, '{}')).toThrow(/missing answers/);
     expect(parseJevResponse(200, true, '{"answers":{}}')).toEqual({ answers: {} });
