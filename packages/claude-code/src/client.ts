@@ -51,6 +51,11 @@ export class JevClient implements JevAsker {
     return this.endpoint.backend;
   }
 
+  /** The model's input token window when known; `decide` budgets requests against it. */
+  get contextWindow(): number | undefined {
+    return this.endpoint.contextWindow;
+  }
+
   async ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse> {
     if (!this.apiKey) throw new Error(missingKeyMessage(this.endpoint.backend));
     const request = buildJevRequest(

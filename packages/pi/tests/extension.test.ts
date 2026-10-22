@@ -102,6 +102,7 @@ interface HarnessOptions {
   error?: unknown;
   signal?: AbortSignal;
   maxRequestTokens?: number;
+  contextWindow?: number;
 }
 
 function createHarness(options: HarnessOptions = {}): FakeHarness {
@@ -175,6 +176,7 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
   };
 
   const asker: JevAsker = {
+    ...(options.contextWindow === undefined ? {} : { contextWindow: options.contextWindow }),
     async ask(_state, questions: JevQuestions) {
       if (options.delay) await options.delay;
       if ('error' in options) throw options.error;
@@ -395,6 +397,18 @@ describe('Pi extension wiring', () => {
     expect(await harness.emit('context', { messages: transcript() })).toEqual({ messages: transcript() });
     await harness.emit('turn_end');
     expect(harness.appended).toHaveLength(1);
+  });
+
+  it('records the model context window the run was budgeted against', async () => {
+    const harness = createHarness({
+      contextWindow: 24_576,
+      error: new JevRequestError('Jev request failed (422): too large', 422),
+    });
+    await start(harness);
+    await harness.emit('turn_end');
+    expect(harness.appended[0]?.data).toMatchObject({
+      outcome: 'failed', stage: 'requesting', contextWindow: 24_576,
+    });
   });
 
   it('keeps fitted statistics when batching fails, leaving the batch count unknown', async () => {

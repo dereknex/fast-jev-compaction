@@ -3,11 +3,15 @@ import {
   applyDecisions,
   batchCalls,
   buildJevRequest,
+  clampToContextWindow,
+  CLOUDFLARE_CLEF_CONTEXT_WINDOW,
+  CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW,
   CLOUDFLARE_CLEF_FLASH_MODEL,
   CLOUDFLARE_CLEF_MODEL,
   collectToolCalls,
   compact,
   compactMessages,
+  contextWindowFor,
   decide,
   decideCall,
   estimateTokens,
@@ -19,6 +23,7 @@ import {
   missingKeyMessage,
   normalizeCloudflareModel,
   parseJevResponse,
+  QUESTION_RESERVE_TOKENS,
   reductionRatio,
   resolveEndpoint,
   resolveOptions,
@@ -284,6 +289,63 @@ describe('question batching', () => {
 
   it('throws when a single question does not fit', () => {
     expect(() => batchCalls(calls, 29_990, options)).toThrow(/no room/);
+  });
+});
+
+describe('context window clamping', () => {
+  it('reports the window of the resolved Clef model and none elsewhere', () => {
+    expect(contextWindowFor('cloudflare', 'clef-flash')).toBe(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+    expect(contextWindowFor('cloudflare', 'clef')).toBe(CLOUDFLARE_CLEF_CONTEXT_WINDOW);
+    expect(contextWindowFor('cloudflare', 'clef-omni')).toBeUndefined();
+    expect(contextWindowFor('typesafe', 'jev-latest')).toBeUndefined();
+    expect(
+      resolveEndpoint({ backend: 'cloudflare', model: 'clef-flash', accountId: 'acc-1' })
+        .contextWindow,
+    ).toBe(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+    expect(resolveEndpoint().contextWindow).toBeUndefined();
+  });
+
+  it('caps the budgets so the state still leaves room for a full batch', () => {
+    const configured = resolveOptions();
+    const clamped = clampToContextWindow(configured, CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+    expect(clamped.maxRequestTokens).toBe(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+    expect(clamped.maxStateTokens).toBe(
+      CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW - QUESTION_RESERVE_TOKENS,
+    );
+    expect(clamped.maxStateTokens).toBeLessThan(configured.maxStateTokens);
+    expect(clampToContextWindow(configured, undefined)).toEqual(configured);
+  });
+
+  it('never sends a request larger than the asker window', async () => {
+    const messages = [message('user', 'Inspect the files.')];
+    for (let i = 0; i < 300; i += 1) {
+      messages.push(call(`call-${i}`, 'Read', { path: `${i}.ts`, body: 'x'.repeat(600) }, 'y'.repeat(600)));
+      messages.push(result(`call-${i}`, 'y'.repeat(600)));
+    }
+    const sizes: number[] = [];
+    const progress: DecisionProgress[] = [];
+    await decide(
+      messages,
+      {
+        contextWindow: CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW,
+        async ask(state, questions) {
+          sizes.push(estimateTokens(JSON.stringify({ model: 'clef-flash', state, questions })));
+          return {
+            answers: Object.fromEntries(
+              Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0 }]),
+            ),
+          };
+        },
+      },
+      undefined,
+      undefined,
+      (next) => progress.push(next),
+    );
+    expect(sizes.length).toBeGreaterThan(0);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+    for (const event of progress) {
+      expect(event.contextWindow).toBe(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+    }
   });
 });
 

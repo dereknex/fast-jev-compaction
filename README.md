@@ -434,8 +434,10 @@ Both Jev and Clef share the same pruning and compaction engine parameters:
 | `keepThreshold` | `0.5` | Minimum model confidence score required to keep a tool call or result intact. |
 | `truncateHeadChars` | `300` | Number of characters retained from the head of a dropped tool result before trimming. |
 | `cooldownTokens` | `8000` | Minimum token growth required in Pi between consecutive compactions to avoid flapping. |
-| `maxStateTokens` | `25000` | Maximum token ceiling for conversation state presented to the decision model. |
-| `maxRequestTokens` | `30000` | Maximum token ceiling per question request sent to the decision model. |
+| `maxStateTokens` | `25000` | Maximum token ceiling for conversation state presented to the decision model. Capped at the model's input window when it is known. |
+| `maxRequestTokens` | `30000` | Maximum token ceiling per question request sent to the decision model. Capped at the model's input window when it is known, leaving room for one full batch of questions. |
+
+Clef reports its input window (`clef-flash` 24,576 tokens, `clef` 65,536), and every request re-sends the whole state, so on Clef the two budgets above are clamped to keep `state + questions` inside the window. Raise the model, not these numbers, when a transcript does not fit.
 
 ---
 

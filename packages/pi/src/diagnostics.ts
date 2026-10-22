@@ -14,6 +14,8 @@ export interface DiagnosticEntryData {
   stateTokens?: number;
   stateStage?: string;
   batches?: number;
+  /** The model's input token window the run was budgeted against. */
+  contextWindow?: number;
   ms: number;
   error?: { type: string; message: string; status?: number };
 }

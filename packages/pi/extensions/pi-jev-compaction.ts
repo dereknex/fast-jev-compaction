@@ -138,7 +138,7 @@ export function installFastJevCompaction(
     }
     const signal = controller.signal;
     const started = Date.now();
-    let progress: Pick<DiagnosticEntryData, 'stage' | 'stateTokens' | 'stateStage' | 'batches'> = { stage: 'preparing' };
+    let progress: Pick<DiagnosticEntryData, 'stage' | 'stateTokens' | 'stateStage' | 'batches' | 'contextWindow'> = { stage: 'preparing' };
     let apiKey = '';
     const onProgress = (next: DecisionProgress): void => {
       progress = next;

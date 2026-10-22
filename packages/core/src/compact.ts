@@ -28,6 +28,9 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
 const REQUEST_OVERHEAD_TOKENS = 20;
 
+/** Estimated tokens one call's two `noul` questions cost, measured on real transcripts. */
+export const QUESTION_TOKENS_PER_CALL = 160;
+
 function finite(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -70,6 +73,38 @@ export function questionsFor(call: ToolCall): JevQuestions {
 
 export const MAX_QUESTIONS_PER_REQUEST = 64;
 export const MAX_CALLS_PER_BATCH = Math.floor(MAX_QUESTIONS_PER_REQUEST / 2); // 32
+
+/** The question budget one full batch needs; the state must leave this much room. */
+export const QUESTION_RESERVE_TOKENS = QUESTION_TOKENS_PER_CALL * MAX_CALLS_PER_BATCH;
+
+/**
+ * Caps the configured budgets at the model's input window. Every request
+ * re-sends the whole state, so the state has to fit with room for a full batch
+ * of questions; otherwise the backend rejects the request (Clef answers HTTP
+ * 422) and no compaction ever happens. A model with no known window keeps the
+ * configured budgets.
+ */
+export function clampToContextWindow(
+  options: ResolvedCompactOptions,
+  contextWindow: number | undefined,
+): ResolvedCompactOptions {
+  if (
+    typeof contextWindow !== 'number' ||
+    !Number.isFinite(contextWindow) ||
+    contextWindow <= 0
+  ) {
+    return options;
+  }
+  const maxRequestTokens = Math.min(options.maxRequestTokens, contextWindow);
+  return {
+    ...options,
+    maxRequestTokens,
+    maxStateTokens: Math.min(
+      options.maxStateTokens,
+      Math.max(1, maxRequestTokens - QUESTION_RESERVE_TOKENS),
+    ),
+  };
+}
 
 /**
  * Splits the candidate calls into batches whose questions, together with the
@@ -300,7 +335,9 @@ export async function decide(
   onProgress?: (progress: DecisionProgress) => void,
 ): Promise<DecisionResult> {
   const started = Date.now();
-  const resolved = resolveOptions(options);
+  const contextWindow = asker.contextWindow;
+  const resolved = clampToContextWindow(resolveOptions(options), contextWindow);
+  const windowField = contextWindow === undefined ? {} : { contextWindow };
   const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
   const candidates = calls.filter((call) => !call.pinned);
 
@@ -309,10 +346,10 @@ export async function decide(
   const answers = new Map<string, CallAnswer>();
   if (candidates.length > 0) {
     signal?.throwIfAborted();
-    onProgress?.({ stage: 'fitting' });
+    onProgress?.({ stage: 'fitting', ...windowField });
     const state = fitState(messages, calls, resolved);
     fitted = state;
-    const progress = { stateTokens: state.tokens, stateStage: state.stage };
+    const progress = { stateTokens: state.tokens, stateStage: state.stage, ...windowField };
     onProgress?.({ stage: 'batching', ...progress });
     batches = batchCalls(candidates, state.tokens, resolved);
     onProgress?.({ stage: 'requesting', ...progress, batches: batches.length });
@@ -328,6 +365,7 @@ export async function decide(
     stateTokens: fitted.tokens,
     stateStage: fitted.stage,
     batches: batches.length,
+    ...windowField,
   });
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),

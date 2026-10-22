@@ -7,6 +7,10 @@ export const CLOUDFLARE_CLEF_MODEL = '@cf/cloudflare/clef';
 export const CLOUDFLARE_CLEF_FLASH_MODEL = '@cf/cloudflare/clef-flash';
 export const CLOUDFLARE_AI_BASE_URL = 'https://api.cloudflare.com/client/v4';
 
+/** Input token windows Cloudflare reports for the Clef models. */
+export const CLOUDFLARE_CLEF_CONTEXT_WINDOW = 65_536;
+export const CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW = 24_576;
+
 export interface JevRequest {
   url: string;
   method: 'POST';
@@ -33,6 +37,8 @@ export interface JevEndpoint {
   bodyModel: string;
   /** Environment variables holding the API key, highest priority first. */
   keyEnvs: readonly string[];
+  /** The model's input token window when known; every request must fit inside it. */
+  contextWindow?: number;
 }
 
 export interface BuildJevRequestParams extends EndpointConfig {
@@ -114,6 +120,21 @@ export function normalizeCloudflareModel(model?: string): {
   };
 }
 
+/**
+ * The input token window of a backend model, in tokens; `undefined` when the
+ * backend does not report one. Clef requests that exceed the window come back
+ * as HTTP 422 (`AiError ... the maximum is <window>`).
+ */
+export function contextWindowFor(
+  backend: JevBackend,
+  bodyModel: string,
+): number | undefined {
+  if (backend !== 'cloudflare') return undefined;
+  if (bodyModel === 'clef-flash') return CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW;
+  if (bodyModel === 'clef') return CLOUDFLARE_CLEF_CONTEXT_WINDOW;
+  return undefined;
+}
+
 /** The backend a config resolves to when `backend` is not set explicitly. */
 export function inferBackend(config: EndpointConfig): JevBackend {
   if (config.backend) return config.backend;
@@ -144,11 +165,13 @@ export function resolveEndpoint(config: EndpointConfig = {}): JevEndpoint {
           'baseUrl points at the TypeSafe endpoint but the backend resolves to "cloudflare"; unset baseUrl or set backend "typesafe"',
         );
       }
+      const bodyModel = normalizeCloudflareModel(model ?? config.baseUrl).bodyModel;
       return {
         backend,
         url: config.baseUrl,
-        bodyModel: normalizeCloudflareModel(model ?? config.baseUrl).bodyModel,
+        bodyModel,
         keyEnvs: CLOUDFLARE_KEY_ENVS,
+        contextWindow: contextWindowFor(backend, bodyModel),
       };
     }
     const envAccountId =
@@ -166,6 +189,7 @@ export function resolveEndpoint(config: EndpointConfig = {}): JevEndpoint {
       url: `${CLOUDFLARE_AI_BASE_URL}/accounts/${accountId}/ai/run/${urlModel}`,
       bodyModel,
       keyEnvs: CLOUDFLARE_KEY_ENVS,
+      contextWindow: contextWindowFor(backend, bodyModel),
     };
   }
 

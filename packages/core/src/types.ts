@@ -127,6 +127,8 @@ export interface DecisionProgress {
   stateTokens?: number;
   stateStage?: string;
   batches?: number;
+  /** The model's input token window, when the asker reports one. */
+  contextWindow?: number;
 }
 
 export interface DecisionStats {
@@ -220,5 +222,7 @@ export interface JevResponse {
 
 /** Anything that can answer Jev questions: `JevClient`, or a host-provided adapter. */
 export interface JevAsker {
+  /** The model's input token window when known; `decide` keeps every request inside it. */
+  readonly contextWindow?: number;
   ask(state: JevState, questions: JevQuestions, signal?: AbortSignal): Promise<JevResponse>;
 }
