@@ -1,6 +1,6 @@
 {
   "name": "@dereknex/jev-compaction",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model and Cloudflare Workers AI Clef.",
   "type": "module",
   "license": "MIT",
