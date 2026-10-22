@@ -489,3 +489,23 @@ bash scripts/setup-release.sh
 
 It builds and tests, publishes any workspace version that is missing from the registry with your own npm login, then registers `.github/workflows/release.yml` as a trusted publisher for each published package. Requirements: npm write access to the packages and 2FA enabled on the npm account. After that, every release goes through OIDC as described above.
 
+### Repairing a Stage-Only Trusted Publisher
+
+npm registers new trusted publishers as **stage publish only** unless `--allow-publish` is passed. A stage-only entry still authenticates the Release workflow, so the failure only shows up at publish time:
+
+```text
+E403: 403 Forbidden - PUT https://registry.npmjs.org/@dereknex%2fjev-compaction - OIDC permission denied for this action
+```
+
+Check and repair each package (needs npm 2FA):
+
+```sh
+npm login
+npm trust list @dereknex/jev-compaction   # note the id of any dereknex/fast-jev-compaction entry
+npm trust revoke @dereknex/jev-compaction --id=<id>
+npm trust github @dereknex/jev-compaction --repo dereknex/fast-jev-compaction --file release.yml --allow-publish -y
+npm trust list @dereknex/jev-compaction   # must report publish (createPackage) permission
+```
+
+Repeat for `@dereknex/pi-jev-compaction`. `scripts/setup-release.sh` runs the same check and offers the revoke/re-add when it finds a stage-only entry.
+
