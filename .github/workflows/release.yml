@@ -40,12 +40,15 @@ jobs:
 
       - name: Create Release Pull Request or Publish to npm
         id: changesets
-        uses: changesets/action@v1
+        # v2 is the changesets/action line that understands @changesets/cli v3 output;
+        # v1 parsed `New tag:` lines that v3 no longer prints, so it never pushed tags or created releases.
+        uses: changesets/action@v2
         with:
-          publish: npm run release
-          version: npm run version-packages
-          commit: "chore: version packages"
-          title: "chore: version packages"
-          createGithubReleases: true
+          publish-script: npm run release
+          version-script: npm run version-packages
+          commit-message: "chore: version packages"
+          pr-title: "chore: version packages"
+          create-github-releases: true
+          push-with-git-cli: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
