@@ -473,6 +473,10 @@ npm run changeset
 3. Enter a concise summary of the change.
 4. Commit the generated file in `.changeset/`.
 
+### Claude Code Plugin Version
+
+`fast-jev-claude-code` is private and ignored by Changesets: it is a bundle of `packages/core/src` plus its hook, so `scripts/sync-claude.js` stamps `packages/claude-code/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` with the version of `@dereknex/jev-compaction`. Claude Code caches an installed plugin by version, so a change that touches only the hook needs a changeset for `@dereknex/jev-compaction` to move that version.
+
 ### Automated Publishing Workflow
 
 1. Merging a PR containing a changeset into `main` automatically triggers the [Release workflow](.github/workflows/release.yml), which creates or updates a **"Version Packages"** PR.

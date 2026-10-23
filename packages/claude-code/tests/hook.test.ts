@@ -1,14 +1,23 @@
 import type { SessionMessage } from 'claude-code';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  jevAsker,
   resolveHookConfig,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.js';
-import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
+import {
+  applyDecisions,
+  collectToolCalls,
+  CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW,
+  decideCall,
+  estimateTokens,
+  type Message,
+} from '../src/index.js';
 
 function message(role: Message['role'], text: string, extra: Partial<SessionMessage> = {}): SessionMessage {
   return { role, text, toolUses: [], ...extra };
@@ -229,5 +238,56 @@ describe('compactSession', () => {
     );
     expect(JSON.parse(bodies[0]!).model).toBe('clef');
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
+  });
+
+  it('reports the Clef window so every request body stays inside it', async () => {
+    const asker = jevAsker(async () => ({ status: 200, ok: true, text: '{"answers":{}}' }), {
+      apiKey: 'cf-token',
+      backend: 'cloudflare',
+      model: 'clef-flash',
+      accountId: 'acc-1',
+    });
+    expect(asker.contextWindow).toBe(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+
+    // History this size fits the default 25,000-token state budget, but not
+    // clef-flash's 24,576-token window once a batch of questions is added.
+    const prose = 'the quick brown fox jumps over the lazy dog. '.repeat(67).slice(0, 3000);
+    const messages: SessionMessage[] = [message('user', 'Fix the failing test.', { handle: 'h-0' })];
+    for (let i = 0; i < 40; i += 1) {
+      messages.push(
+        message('assistant', prose, {
+          toolUses: [{ tool_use_id: `t${i}`, tool: 'Read', input: { file_path: `src/${i}.ts` } }],
+          handle: `h-${i}`,
+        }),
+      );
+      messages.push(result(`t${i}`, 'ok'));
+    }
+    messages.push(message('assistant', 'done', { handle: 'h-last' }));
+
+    const bodies: string[] = [];
+    await compactSession(
+      messages,
+      {
+        ...resolveHookConfig({ preserveRecentMessages: 1 }),
+        apiKey: 'cf-token',
+        accountId: 'acc-1',
+        model: 'clef-flash',
+      },
+      jevFetch(() => 0.1, bodies),
+    );
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(estimateTokens(body)).toBeLessThanOrEqual(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+    }
+  });
+
+  it('ships the plugin at the version of the core sources it bundles', () => {
+    const read = (path: string) =>
+      JSON.parse(
+        readFileSync(new URL(`../../../${path}`, import.meta.url).pathname, 'utf8'),
+      );
+    const version = read('packages/core/package.json').version;
+    expect(read('packages/claude-code/.claude-plugin/plugin.json').version).toBe(version);
+    expect(read('.claude-plugin/marketplace.json').plugins[0].version).toBe(version);
   });
 });

@@ -10,7 +10,7 @@
       "name": "fast-jev-compaction",
       "source": "./packages/claude-code",
       "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
-      "version": "0.3.0",
+      "version": "0.5.1",
       "license": "MIT"
     }
   ]

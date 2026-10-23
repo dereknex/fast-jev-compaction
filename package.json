@@ -20,7 +20,7 @@
     "demo": "tsx examples/demo.ts",
     "validate:plugin": "claude plugin validate packages/claude-code/.claude-plugin/plugin.json",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && node scripts/sync-claude.js",
     "release": "npm run build && changeset publish"
   },
   "devDependencies": {

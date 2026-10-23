@@ -125,8 +125,13 @@ export function jevAsker(
     typeof apiKeyOrOptions === 'string'
       ? { apiKey: apiKeyOrOptions, model }
       : apiKeyOrOptions;
+  // This asker is built here rather than by `JevClient`, so it has to report the
+  // window itself; without it `decide()` keeps the default budgets and Clef
+  // answers 422 on `clef-flash` (24,576 tokens).
+  const { contextWindow } = resolveEndpoint(options);
 
   return {
+    contextWindow,
     async ask(state, questions) {
       const request = buildJevRequest(options, state, questions);
       const response = await fetchFn(request.url, {
