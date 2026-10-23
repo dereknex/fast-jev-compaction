@@ -14,7 +14,7 @@ Continuous, verbatim context pruning extension for the [Pi coding agent](https:/
 ## Installation
 
 ```sh
-pi install @dereknex/pi-jev-compaction
+pi install npm:@dereknex/pi-jev-compaction
 ```
 
 Or run directly from a local clone:
