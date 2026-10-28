@@ -1,5 +1,16 @@
 # @dereknex/pi-jev-compaction
 
+## 0.4.2
+
+### Patch Changes
+
+- [`94de824`](https://github.com/dereknex/fast-jev-compaction/commit/94de824f2b644a09def3470a2de1e14fa7246e08) Thanks [@dereknex](https://github.com/dereknex)! - Optimize package metadata for pi.dev package catalog discovery:
+  - Add `author` field in `package.json`.
+  - Prioritize `pi-package` and `pi-extension` keywords at the beginning of the `keywords` array.
+  - Point `pi.extensions` explicitly to `./extensions/pi-jev-compaction.ts`.
+- Updated dependencies [[`2cb7251`](https://github.com/dereknex/fast-jev-compaction/commit/2cb725102d68d5f020eda931376019d489b854cd)]:
+  - @dereknex/jev-compaction@0.5.2
+
 ## 0.4.1
 
 ### Patch Changes

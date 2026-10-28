@@ -1,6 +1,6 @@
 {
   "name": "@dereknex/pi-jev-compaction",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Verbatim context pruning for Pi using TypeSafe Jev decisions.",
   "author": "dereknex <derek@nextty.com>",
   "keywords": [
@@ -45,7 +45,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dereknex/jev-compaction": "^0.5.1",
+    "@dereknex/jev-compaction": "^0.5.2",
     "xstate": "^5.33.2"
   },
   "peerDependencies": {
