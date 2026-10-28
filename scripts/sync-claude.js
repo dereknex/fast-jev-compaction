@@ -31,6 +31,13 @@ const stamp = (file, apply) => {
   console.log(`✓ ${file} -> ${version}`);
 };
 
+// The release action reads a changelog for every package whose version changes.
+const changelog = readFileSync(resolve(root, 'packages/core/CHANGELOG.md'), 'utf8');
+writeFileSync(
+  resolve(root, 'packages/claude-code/CHANGELOG.md'),
+  changelog.replace('# @dereknex/jev-compaction', '# fast-jev-claude-code'),
+);
+
 stamp('packages/claude-code/package.json', (json) => {
   json.version = version;
 });
