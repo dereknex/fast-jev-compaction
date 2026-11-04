@@ -519,7 +519,13 @@ Repeat for `@dereknex/pi-jev-compaction`. `scripts/setup-release.sh` runs the sa
 
 ### Expired Trusted Publisher
 
-The same `E403` has a second cause. A newly created trusted publisher must complete its **first successful publish within 2 days**; that publish is what binds the configuration to the repository's immutable identity. A configuration that never got there expires, and `npm trust list` cannot tell you: the entry and its permissions still read as correct.
+`ENEEDAUTH` is a different failure from the `E403` above: npm never obtained credentials at all, so it never even reached the PUT.
+
+```text
+ENEEDAUTH: This command requires you to be logged in to https://registry.npmjs.org/
+```
+
+An expired trusted publisher is the usual cause. A newly created trusted publisher must complete its **first successful publish within 2 days**; that publish is what binds the configuration to the repository's immutable identity. A configuration that never got there expires, and `npm trust list` cannot tell you: the entry and its permissions still read as correct. (Other causes of the same error: a workflow filename that does not match what npmjs.com has, or a missing `id-token: write` permission.)
 
 Delete and recreate it, then trigger the release immediately — the fresh entry is on the same 2-day clock, and a re-run of the failed Release workflow is its first successful publish:
 

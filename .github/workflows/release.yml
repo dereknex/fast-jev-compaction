@@ -52,3 +52,6 @@ jobs:
           push-with-git-cli: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # npm only logs why its OIDC exchange was skipped/failed at verbose level;
+          # without this a credential failure surfaces as a bare ENEEDAUTH.
+          NPM_CONFIG_LOGLEVEL: verbose
