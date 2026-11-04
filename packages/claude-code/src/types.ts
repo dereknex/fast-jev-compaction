@@ -96,6 +96,11 @@ export interface FittedState {
   tokens: number;
   /** Which fitting stage produced the state, for diagnostics. */
   stage: string;
+  /**
+   * Message indices left out of `state` because the history did not fit; their
+   * tool calls are not judged in this run.
+   */
+  omitted?: readonly number[];
 }
 
 export interface CompactOptions {
@@ -111,6 +116,11 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Tool calls with decisions already applied by the caller; not asked again.
+   * Their existing decisions are left unchanged.
+   */
+  skipCallIds?: readonly string[];
 }
 
 export interface ResolvedCompactOptions {
@@ -127,6 +137,10 @@ export interface DecisionProgress {
   stateTokens?: number;
   stateStage?: string;
   batches?: number;
+  /** Calls left out of the state; not judged in this run. */
+  deferred?: number;
+  /** Calls with reused decisions; not re-asked in this run. */
+  skipped?: number;
   /** The model's input token window, when the asker reports one. */
   contextWindow?: number;
 }
@@ -137,6 +151,10 @@ export interface DecisionStats {
   resultsDropped: number;
   callsDropped: number;
   pinned: number;
+  /** Calls left out of the state; not judged in this run. */
+  deferred: number;
+  /** Calls with reused decisions; not re-asked in this run. */
+  skipped: number;
   stateTokens: number;
   /** Which fitting stage the state needed, '' when no request was made. */
   stateStage: string;

@@ -13,6 +13,7 @@ import { adaptMessages } from '../src/adapter.js';
 import {
   applyLedger,
   DECISION_ENTRY_TYPE,
+  reusableCallIds,
   measureContextChars,
   mergeDecisions,
   persistedDecisions,
@@ -120,6 +121,8 @@ function entry(
         resultsDropped: 0,
         callsDropped: 0,
         pinned: 0,
+        deferred: 0,
+        skipped: 0,
         stateTokens: 1,
         stateStage: 'full',
         requests: 1,
@@ -134,6 +137,20 @@ function entry(
     },
   };
 }
+
+describe('reused decisions', () => {
+  it('reuses evaluated keeps and dropped results without treating pinned or old keeps as evaluated', () => {
+    const ledger: DecisionLedger = new Map([
+      ['a', decision('a', 'drop_result')],
+      ['b', { ...decision('b', 'keep'), reason: 'kept' }],
+      ['c', decision('c', 'drop_call')],
+      ['pinned', { ...decision('pinned', 'keep'), reason: 'pinned' }],
+      ['old', decision('old', 'keep')],
+    ]);
+    expect([...reusableCallIds(ledger)]).toEqual(['a', 'b']);
+    expect(reusableCallIds(new Map()).size).toBe(0);
+  });
+});
 
 describe('Pi message adapter', () => {
   it('pairs assistant calls and tool results while exposing text and thinking to Jev', () => {
@@ -183,7 +200,22 @@ describe('decision ledger', () => {
     ).toBe(false);
   });
 
-  it('persists only the public decision fields', () => {
+  it('retains the evaluated reason when a pinned or old keep is assessed and then pinned again', () => {
+    const old = decision('x', 'keep');
+    const pinned: PersistedDecision = { ...old, reason: 'pinned' };
+    const evaluated: PersistedDecision = { ...old, reason: 'kept' };
+    for (const initial of [old, pinned]) {
+      const rebuilt = rebuildLedger([
+        entry('initial', [initial]),
+        entry('evaluated', [evaluated]),
+        entry('pinned-again', [pinned]),
+      ]);
+      expect(rebuilt.get('x')).toEqual(evaluated);
+      expect([...reusableCallIds(rebuilt)]).toEqual(['x']);
+    }
+  });
+
+  it('persists the decision reason without persisting transient ids', () => {
     expect(
       persistedDecisions([
         {
@@ -203,6 +235,7 @@ describe('decision ledger', () => {
         action: 'drop_call',
         keepCall: 0.1,
         keepResult: 0.2,
+        reason: 'call_dropped',
       },
     ]);
   });

@@ -14,6 +14,10 @@ export interface DiagnosticEntryData {
   stateTokens?: number;
   stateStage?: string;
   batches?: number;
+  /** Calls left out of the state; not judged in this run. */
+  deferred?: number;
+  /** Calls with reused decisions; not re-asked in this run. */
+  skipped?: number;
   /** The model's input token window the run was budgeted against. */
   contextWindow?: number;
   ms: number;

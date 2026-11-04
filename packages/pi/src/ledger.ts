@@ -12,6 +12,8 @@ export interface PersistedDecision {
   action: CallAction;
   keepCall: number;
   keepResult: number;
+  /** Distinguishes an evaluated keep from the automatic keep of a pinned call. */
+  reason?: CallDecision['reason'];
 }
 
 export interface LedgerRunStats extends DecisionStats {
@@ -54,19 +56,25 @@ function parseDecision(value: unknown): PersistedDecision | undefined {
     return undefined;
   if (typeof keepResult !== 'number' || !Number.isFinite(keepResult))
     return undefined;
-  return { toolCallId, tool, action, keepCall, keepResult };
+  const reason = value.reason;
+  if (
+    reason !== undefined && reason !== 'pinned' && reason !== 'kept' &&
+    reason !== 'result_dropped' && reason !== 'call_dropped'
+  ) return undefined;
+  return { toolCallId, tool, action, keepCall, keepResult, ...(reason ? { reason } : {}) };
 }
 
 export function persistedDecisions(
   decisions: readonly CallDecision[],
 ): PersistedDecision[] {
   return decisions.map(
-    ({ toolCallId, tool_use_id, id, tool, action, keepCall, keepResult }) => ({
+    ({ toolCallId, tool_use_id, id, tool, action, keepCall, keepResult, reason }) => ({
       toolCallId: toolCallId ?? tool_use_id ?? id,
       tool,
       action,
       keepCall,
       keepResult,
+      reason,
     }),
   );
 }
@@ -79,11 +87,27 @@ export function mergeDecisions(
     const previous = ledger.get(decision.toolCallId);
     if (
       !previous ||
-      ACTION_RANK[decision.action] > ACTION_RANK[previous.action]
+      ACTION_RANK[decision.action] > ACTION_RANK[previous.action] ||
+      (decision.action === previous.action &&
+        decision.reason !== undefined && decision.reason !== 'pinned')
     ) {
       ledger.set(decision.toolCallId, decision);
     }
   }
+}
+
+/** Reuses evaluated decisions; an older keep without a reason needs one evaluation. */
+export function reusableCallIds(
+  ledger: ReadonlyMap<string, PersistedDecision>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const [toolCallId, decision] of ledger) {
+    if (decision.action === 'drop_result' ||
+        (decision.action === 'keep' && decision.reason === 'kept')) {
+      ids.add(toolCallId);
+    }
+  }
+  return ids;
 }
 
 export function rebuildLedger(branch: readonly SessionEntry[]): DecisionLedger {

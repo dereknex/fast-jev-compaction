@@ -15,7 +15,9 @@ Most context compaction asks an LLM to summarize old turns. A summary is lossy: 
 
 `fast-jev-compaction` never summarizes conversational history:
 - It only deletes or truncates tool calls and results that Jev or Clef determines are no longer needed.
-- Decisions are made while showing the model the whole conversation state.
+- Decisions are made while showing the model the whole conversation state (when
+  the state cannot fit, the oldest entries are left out of it and their calls
+  are not judged that run—never judged blind).
 - User and assistant text, system instructions, thinking blocks, and message order stay verbatim.
 - In Pi, decisions are persisted as append-only entries (`fast-jev-decisions`) in session history and applied on-the-fly when feeding context to the LLM—the underlying session JSONL on disk is never altered.
 
@@ -434,10 +436,12 @@ Both Jev and Clef share the same pruning and compaction engine parameters:
 | `keepThreshold` | `0.5` | Minimum model confidence score required to keep a tool call or result intact. |
 | `truncateHeadChars` | `300` | Number of characters retained from the head of a dropped tool result before trimming. |
 | `cooldownTokens` | `8000` | Minimum token growth required in Pi between consecutive compactions to avoid flapping. |
-| `maxStateTokens` | `25000` | Maximum token ceiling for conversation state presented to the decision model. Capped at the model's input window when it is known. |
-| `maxRequestTokens` | `30000` | Maximum token ceiling per question request sent to the decision model. Capped at the model's input window when it is known, leaving room for one full batch of questions. |
+| `maxStateTokens` | `25000` | Maximum token ceiling for conversation state presented to the decision model. Capped at the model's input window minus the questions this run sends, when the window is known. |
+| `maxRequestTokens` | `30000` | Maximum token ceiling per question request sent to the decision model. Capped at the model's input window when it is known, leaving room for the questions of each batch. |
 
-Clef reports its input window (`clef-flash` 24,576 tokens, `clef` 65,536), and every request re-sends the whole state, so on Clef the two budgets above are clamped to keep `state + questions` inside the window. Raise the model, not these numbers, when a transcript does not fit.
+Clef reports its input window (`clef-flash` 24,576 tokens, `clef` 65,536), and every request re-sends the whole state, so on Clef the two budgets above are clamped to keep `state + questions` inside the window. The reserve includes 20 tokens for the request envelope plus 160 tokens per tool call asked about, at most one full batch of 32 calls; unusually long tool names get enough room for their actual questions. A transcript with a handful of candidates does not pay for the full batch. Raise the model, not these numbers, when a transcript does not fit.
+
+When even the most compact form of the state is too large, the oldest entries leave the state and the tool calls they hold are not judged in that run. A marker in the state and the run stats (`deferred`) say how much was left out; the transcript itself is untouched. Library callers can pass `skipCallIds` to reuse decisions they already applied (`skipped`). During proactive pruning, Pi reuses evaluated `keep` and `drop_result` decisions from its ledger, including after reload. Pinned calls are not treated as evaluated; older `keep` entries without a recorded reason are evaluated once before they are reused. Manual `/fast-jev run` and Pi compaction reassess the surviving calls so old decisions can change as the task progresses. Earlier pruning remains irreversible.
 
 ---
 

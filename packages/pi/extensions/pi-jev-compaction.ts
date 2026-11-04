@@ -33,6 +33,7 @@ import { createKeyResolver, type KeyResolver } from '../src/key.js';
 import {
   applyLedger,
   DECISION_ENTRY_TYPE,
+  reusableCallIds,
   measureContextChars,
   mergeDecisions,
   persistedDecisions,
@@ -77,7 +78,14 @@ function percent(value: number): string {
 }
 
 function summary(stats: LedgerRunStats): string {
-  return `${percent(stats.reductionRatio)} reduction; ${stats.resultsDropped} results truncated, ${stats.callsDropped} calls dropped, ${stats.pinned} pinned; ${stats.requests} request(s)`;
+  const notes = [
+    stats.stateStage === 'window trimmed' ? 'state window trimmed' : '',
+    stats.deferred > 0 ? `${stats.deferred} not judged` : '',
+    stats.skipped > 0 ? `${stats.skipped} decisions reused` : '',
+  ].filter(Boolean);
+  return `${percent(stats.reductionRatio)} reduction; ${stats.resultsDropped} results truncated, ${stats.callsDropped} calls dropped, ${stats.pinned} pinned; ${stats.requests} request(s)${
+    notes.length > 0 ? `; ${notes.join(', ')}` : ''
+  }`;
 }
 
 function statusText(
@@ -138,7 +146,7 @@ export function installFastJevCompaction(
     }
     const signal = controller.signal;
     const started = Date.now();
-    let progress: Pick<DiagnosticEntryData, 'stage' | 'stateTokens' | 'stateStage' | 'batches' | 'contextWindow'> = { stage: 'preparing' };
+    let progress: Pick<DiagnosticEntryData, 'stage' | 'stateTokens' | 'stateStage' | 'batches' | 'contextWindow' | 'deferred' | 'skipped'> = { stage: 'preparing' };
     let apiKey = '';
     const onProgress = (next: DecisionProgress): void => {
       progress = next;
@@ -148,9 +156,12 @@ export function installFastJevCompaction(
       const adapted = adaptMessages(
         applyLedger(messages, ledger, config.truncateHeadChars),
       );
+      const skipCallIds = force ? new Set<string>() : reusableCallIds(ledger);
       if (
         collectToolCalls(adapted, config.preserveRecentMessages).some(
-          (call) => !call.pinned,
+          (call) =>
+            !call.pinned &&
+            !skipCallIds.has(call.toolCallId ?? call.tool_use_id),
         )
       ) {
         progress = { stage: 'key' };
@@ -172,7 +183,7 @@ export function installFastJevCompaction(
           baseUrl: config.baseUrl,
           accountId: config.accountId,
         }),
-        config,
+        { ...config, skipCallIds: [...skipCallIds] },
         signal,
         onProgress,
       );

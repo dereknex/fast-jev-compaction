@@ -123,21 +123,34 @@ function compactCall(call: ToolCall): string {
   } ${call.resultChars}ch`;
 }
 
+/** One placeholder per folded run, in place of one per message. */
+const RUN_TEXT = '[… text omitted in this run …]';
+const COLLAPSED_TEXT = /^\[… \d+ chars omitted …\]$/;
+
 /**
  * Folds runs of adjacent call-only entries into one entry each, so the
- * per-entry envelope is paid once per run; the call lines keep their ids.
+ * per-entry envelope is paid once per run; the call lines keep their ids. An
+ * entry whose text was already collapsed to a placeholder is foldable too,
+ * otherwise any message that carried prose would keep its own envelope.
  */
 function mergeCallRuns(history: readonly HistoryEntry[], pinned: (e: HistoryEntry) => boolean): HistoryEntry[] {
   const merged: HistoryEntry[] = [];
   for (const entry of history) {
     const previous = merged[merged.length - 1];
     const foldable = (e: HistoryEntry): boolean =>
-      !pinned(e) && e.text.length === 0 && typeof e.tool_calls?.[0] === 'string';
+      !pinned(e) &&
+      (e.text.length === 0 || e.text === RUN_TEXT || COLLAPSED_TEXT.test(e.text)) &&
+      typeof e.tool_calls?.[0] === 'string';
     if (previous && foldable(previous) && foldable(entry) && previous.role === entry.role) {
-      previous.tool_calls = [...(previous.tool_calls as string[]), ...(entry.tool_calls as string[])];
+      (previous.tool_calls as string[]).push(...(entry.tool_calls as string[]));
+      if (previous.text.length > 0 || entry.text.length > 0) previous.text = RUN_TEXT;
       continue;
     }
-    merged.push({ ...entry });
+    const copy: HistoryEntry = { ...entry };
+    if (typeof entry.tool_calls?.[0] === 'string') {
+      copy.tool_calls = [...(entry.tool_calls as string[])];
+    }
+    merged.push(copy);
   }
   return merged;
 }
@@ -193,8 +206,10 @@ export function goalFromMessages(messages: readonly Message[]): string {
  * until it fits `maxStateTokens`: tool inputs are truncated, then long texts
  * are abridged oldest-first (pinned messages last), then old messages collapse
  * to a one-line note, then old tool calls shrink to one line each, then old
- * messages that carry no call are left out, then runs of old call-only
- * messages are folded into one entry. Throws when even that is too big.
+ * messages that carry no call are left out, then runs of old call entries are
+ * folded into one entry, then the oldest entries leave the state altogether
+ * (their calls are not judged in that run). Throws only when the preserved
+ * messages alone are too big.
  */
 export function fitState(
   messages: readonly Message[],
@@ -294,15 +309,72 @@ export function fitState(
     }
   }
 
-  history = mergeCallRuns(
-    history.filter((_, i) => !left.has(i)),
-    pinned,
-  );
-  perEntry = history.map(entryTokens);
-  tokens = baseTokens + perEntry.reduce((sum, n) => sum + n, 0);
-  if (fits()) return fitted(history, tokens, 'old calls merged');
+  history = history.filter((_, i) => !left.has(i));
+  const fold = (entries: readonly HistoryEntry[]): { entries: HistoryEntry[]; tokens: number } => {
+    const folded = mergeCallRuns(entries, pinned);
+    return {
+      entries: folded,
+      tokens: baseTokens + folded.reduce((sum, entry) => sum + entryTokens(entry), 0),
+    };
+  };
+  const marker = (count: number): HistoryEntry => ({
+    i: -1,
+    role: 'user',
+    text: `[… ${count} older messages omitted from this state …]`,
+  });
+  const whole = fold(history);
+  if (whole.tokens <= options.maxStateTokens) {
+    return fitted(whole.entries, whole.tokens, 'old calls merged');
+  }
 
-  throw new Error(
-    `history too large for Jev (~${tokens} tokens after truncation, limit ${options.maxStateTokens})`,
-  );
+  // Folding is already the cheapest form, so the state cannot carry the whole
+  // history. The oldest non-pinned entries leave it and their calls are not
+  // judged in this run; a marker states how much is missing.
+  const drop = (count: number): {
+    folded: ReturnType<typeof fold>;
+    omitted: number[];
+    tokens: number;
+  } => {
+    const kept: HistoryEntry[] = [];
+    const omitted: number[] = [];
+    for (const entry of history) {
+      if (omitted.length < count && !pinned(entry)) {
+        omitted.push(entry.i);
+        continue;
+      }
+      kept.push(entry);
+    }
+    const folded = fold(kept);
+    return {
+      folded,
+      omitted,
+      tokens: folded.tokens + entryTokens(marker(omitted.length)),
+    };
+  };
+  // Dropping more entries only shrinks the folded state, so bisect for the
+  // smallest number that fits instead of re-folding once per dropped entry.
+  let low = 1;
+  let high = history.filter((entry) => !pinned(entry)).length;
+  let best: ReturnType<typeof drop> | undefined;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = drop(mid);
+    if (candidate.tokens <= options.maxStateTokens) {
+      best = candidate;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+  if (!best) {
+    throw new Error(
+      `history too large for Jev (~${drop(high).tokens} tokens after truncation, limit ${options.maxStateTokens}); the preserved messages alone exceed it`,
+    );
+  }
+  return {
+    state: stateOf([marker(best.omitted.length), ...best.folded.entries]),
+    tokens: best.tokens,
+    stage: 'window trimmed',
+    omitted: best.omitted,
+  };
 }

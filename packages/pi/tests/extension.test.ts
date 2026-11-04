@@ -93,6 +93,7 @@ interface FakeHarness {
 
 interface HarnessOptions {
   answer?: number;
+  keepCall?: number;
   fail?: boolean;
   keyFail?: boolean;
   delay?: Promise<void>;
@@ -102,7 +103,9 @@ interface HarnessOptions {
   error?: unknown;
   signal?: AbortSignal;
   maxRequestTokens?: number;
+  preserveRecentMessages?: number;
   contextWindow?: number;
+  seen?: string[];
 }
 
 function createHarness(options: HarnessOptions = {}): FakeHarness {
@@ -178,6 +181,7 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
   const asker: JevAsker = {
     ...(options.contextWindow === undefined ? {} : { contextWindow: options.contextWindow }),
     async ask(_state, questions: JevQuestions) {
+      if (options.seen) options.seen.push(...Object.keys(questions));
       if (options.delay) await options.delay;
       if ('error' in options) throw options.error;
       if (options.fail) throw new Error('TOPSECRET provider failure');
@@ -185,7 +189,9 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
         answers: Object.fromEntries(
           Object.keys(questions).map((name) => [
             name,
-            { type: 'noul', noul: options.answer ?? 0.1 },
+            { type: 'noul', noul: name.startsWith('call_')
+              ? options.keepCall ?? options.answer ?? 0.1
+              : options.answer ?? 0.1 },
           ]),
         ),
       };
@@ -198,7 +204,7 @@ function createHarness(options: HarnessOptions = {}): FakeHarness {
       return {
         ...DEFAULT_CONFIG,
         apiKeyCommand: 'generic-command',
-        preserveRecentMessages: 0,
+        preserveRecentMessages: options.preserveRecentMessages ?? 0,
         minReductionRatio: options.minReductionRatio ?? 0.1,
         maxRequestTokens: options.maxRequestTokens ?? DEFAULT_CONFIG.maxRequestTokens,
       };
@@ -292,6 +298,94 @@ describe('Pi extension wiring', () => {
       messages: AgentMessage[];
     };
     expect(rebuiltResult.messages).toEqual(contextResult.messages);
+  });
+
+  it('does not re-ask calls whose result an earlier run already dropped', async () => {
+    const seen: string[] = [];
+    const harness = createHarness({
+      seen,
+      existingEntries: [
+        ...messageEntries(transcript()),
+        {
+          type: 'custom',
+          customType: DECISION_ENTRY_TYPE,
+          id: 'd1',
+          parentId: 'm4',
+          timestamp: new Date(5).toISOString(),
+          data: {
+            version: 1,
+            decisions: [
+              {
+                toolCallId: 'call-1',
+                tool: 'read',
+                action: 'drop_result',
+                keepCall: 0.9,
+                keepResult: 0.1,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await start(harness);
+    await harness.emit('turn_end');
+    expect(seen).toEqual([]);
+    expect(harness.appended).toHaveLength(1);
+    expect(harness.appended[0]?.data).toMatchObject({
+      stats: { skipped: 1, requests: 0 },
+    });
+    expect(JSON.stringify(harness.notify.mock.calls)).toContain('decisions reused');
+  });
+
+  it.each(['keep', 'drop_result'] as const)('reuses an evaluated %s decision after reload without resolving a key', async (action) => {
+    const seen: string[] = [];
+    const first = createHarness({ answer: action === 'keep' ? 0.9 : 0.1, keepCall: 0.9 });
+    await start(first);
+    await first.emit('turn_end');
+    const harness = createHarness({ seen, keyFail: true, existingEntries: first.entries });
+    await start(harness, 'reload');
+    await harness.emit('turn_end');
+    expect(seen).toEqual([]);
+    expect(harness.appended[0]?.customType).toBe(DECISION_ENTRY_TYPE);
+    expect(harness.appended[0]?.data).toMatchObject({ stats: { skipped: 1, requests: 0 } });
+    const context = await harness.emit('context', { messages: transcript() });
+    if (action === 'keep') expect(context).toEqual({ messages: transcript() });
+  });
+
+  it('evaluates calls once their pinned protection expires', async () => {
+    const seen: string[] = [];
+    const harness = createHarness({ seen, preserveRecentMessages: 3 });
+    await start(harness);
+    await harness.emit('turn_end');
+    expect(seen).toEqual([]);
+    const later = messageEntries([transcript()[0]!, transcript()[3]!]);
+    harness.entries.push(...later.map((entry) => ({ ...entry, id: `later-${entry.id}` })));
+    await start(harness, 'reload');
+    await harness.emit('turn_end');
+    expect(seen).toEqual(['call_t1', 'result_t1']);
+  });
+
+  it.each(['manual', 'compaction'] as const)('reassesses a cached keep during %s runs', async (mode) => {
+    const first = createHarness({ answer: 0.9 });
+    await start(first);
+    await first.emit('turn_end');
+    const seen: string[] = [];
+    const harness = createHarness({ seen, existingEntries: first.entries });
+    await start(harness, 'reload');
+    if (mode === 'manual') {
+      await harness.commands.get('fast-jev')?.('run', harness.context);
+    } else {
+      await harness.emit('session_before_compact', {
+        preparation: { tokensBefore: 70_000 },
+        branchEntries: [...harness.entries],
+        signal: new AbortController().signal,
+      });
+    }
+    expect(seen).toEqual(['call_t1', 'result_t1']);
+    expect(harness.appended[0]?.data).toMatchObject({
+      decisions: [expect.objectContaining({ action: 'drop_call' })],
+      stats: { skipped: 0, callsDropped: 1 },
+    });
   });
 
   it('returns a verbatim compaction entry when reduction is sufficient', async () => {

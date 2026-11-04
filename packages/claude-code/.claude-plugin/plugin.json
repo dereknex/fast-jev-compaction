@@ -55,7 +55,7 @@
     "maxStateTokens": {
       "type": "number",
       "title": "Maximum Jev state tokens",
-      "description": "Estimated token budget for the conversation state sent with every Jev request.",
+      "description": "Estimated token budget for the conversation state sent with every Jev request; capped by the model window minus the questions a run sends. Oldest messages leave the state, and are not judged, when it cannot fit.",
       "default": 25000
     },
     "maxRequestTokens": {

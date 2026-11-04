@@ -24,6 +24,8 @@ import {
   normalizeCloudflareModel,
   parseJevResponse,
   QUESTION_RESERVE_TOKENS,
+  QUESTION_TOKENS_PER_CALL,
+  questionsFor,
   reductionRatio,
   resolveEndpoint,
   resolveOptions,
@@ -233,6 +235,55 @@ describe('state fitting', () => {
     expect(merged.state.history[2]?.text).toBe('done');
   });
 
+  it('folds runs whose messages carried text once the text is a placeholder', () => {
+    const messages = [message('user', 'start')];
+    for (let i = 0; i < 40; i += 1) {
+      messages.push(
+        message('assistant', `[thinking]\n${'t'.repeat(200)}\nworking on ${i}`, {
+          toolUses: [{ tool_use_id: `c${i}`, tool: 'Read', input: { file_path: `/repo/${i}.ts` }, text: 'x' }],
+        }),
+        result(`c${i}`, 'x'),
+      );
+    }
+    messages.push(message('assistant', 'done'));
+    const calls = collectToolCalls(messages, 1);
+    const full = fitState(messages, calls, { ...fit, preserveRecentMessages: 1 });
+    const merged = fitState(messages, calls, {
+      ...fit,
+      preserveRecentMessages: 1,
+      maxStateTokens: Math.floor(full.tokens * 0.35),
+    });
+    expect(merged.stage).toBe('old calls merged');
+    expect(merged.state.history).toHaveLength(3);
+    expect(merged.state.history[1]?.tool_calls).toHaveLength(40);
+    expect(merged.state.history[1]?.text).toBe('[… text omitted in this run …]');
+    expect(merged.tokens).toBeLessThanOrEqual(Math.floor(full.tokens * 0.35));
+  });
+
+  it('leaves the oldest entries out of the state instead of failing', () => {
+    const messages = [message('user', 'start')];
+    for (let i = 0; i < 200; i += 1) {
+      messages.push(call(`c${i}`, 'Read', { file_path: `/repo/${i}.ts` }, 'x'), result(`c${i}`, 'x'));
+    }
+    messages.push(message('assistant', 'done'));
+    const calls = collectToolCalls(messages, 1);
+    const { state, stage, tokens, omitted } = fitState(messages, calls, {
+      ...fit,
+      preserveRecentMessages: 1,
+      maxStateTokens: 600,
+    });
+    expect(stage).toBe('window trimmed');
+    expect(tokens).toBeLessThanOrEqual(600);
+    expect(omitted?.length).toBeGreaterThan(0);
+    const dropped = new Set(omitted);
+    expect(dropped.has(0)).toBe(false);
+    expect(dropped.has(messages.length - 1)).toBe(false);
+    expect(state.history[0]?.text).toBe(
+      `[… ${omitted?.length} older messages omitted from this state …]`,
+    );
+    expect(state.history.at(-1)?.text).toBe('done');
+  });
+
   it('abridges long texts oldest-first and collapses old messages last', () => {
     const long = (n: number) => `${n} ` + 'lorem ipsum '.repeat(300);
     const messages = [
@@ -310,10 +361,50 @@ describe('context window clamping', () => {
     const clamped = clampToContextWindow(configured, CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
     expect(clamped.maxRequestTokens).toBe(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
     expect(clamped.maxStateTokens).toBe(
-      CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW - QUESTION_RESERVE_TOKENS,
+      CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW - QUESTION_RESERVE_TOKENS - 20,
     );
     expect(clamped.maxStateTokens).toBeLessThan(configured.maxStateTokens);
     expect(clampToContextWindow(configured, undefined)).toEqual(configured);
+  });
+
+  it('reserves questions for the calls this run actually asks about', () => {
+    const configured = resolveOptions();
+    const one = clampToContextWindow(configured, CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW, 1);
+    expect(one.maxStateTokens).toBe(
+      CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW - QUESTION_TOKENS_PER_CALL - 20,
+    );
+    const none = clampToContextWindow(configured, CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW, 0);
+    expect(none.maxStateTokens).toBe(CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW);
+  });
+
+  it.each([
+    { tool: 'mcp__cloudflare_api__list_things', pad: 120 },
+    { tool: `mcp__${'long_namespace_'.repeat(12)}read`, pad: 36 },
+  ])('leaves room for a single $tool candidate near the context limit', async ({ tool, pad }) => {
+    const messages = [message('user', `Goal ${'.'.repeat(pad)}`)];
+    for (let i = 0; i < 60; i += 1) {
+      messages.push(message('assistant', '.'.repeat(500)));
+    }
+    messages.push(
+      call('c1', tool, { path: 'src/a.ts' }, ''),
+      result('c1', 'x'.repeat(5000)),
+    );
+    const seen: Seen[] = [];
+    const asker = {
+      ...fakeJev(() => 0.9, seen),
+      contextWindow: CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW,
+    };
+    const output = await decide(messages, asker, { preserveRecentMessages: 0 });
+    expect(output.stats.requests).toBe(1);
+    expect(seen[0]?.questions).toEqual(['call_t1', 'result_t1']);
+    const request = buildJevRequest(
+      { backend: 'cloudflare', model: 'clef-flash', accountId: 'test', apiKey: 'test' },
+      seen[0]!.state as object,
+      questionsFor(output.calls[0]!),
+    );
+    expect(estimateTokens(request.body)).toBeLessThanOrEqual(
+      CLOUDFLARE_CLEF_FLASH_CONTEXT_WINDOW,
+    );
   });
 
   it('never sends a request larger than the asker window', async () => {
@@ -422,6 +513,40 @@ describe('decisions', () => {
     const noHead = applyDecisions(messages, decisions, calls, 0);
     expect(noHead[2]?.toolResults?.[0]?.text).toBe(
       `[fast-jev-compaction truncated ${total} chars of this tool result; re-run the tool if needed]`,
+    );
+  });
+});
+
+describe('earlier decisions', () => {
+  it('does not re-ask calls whose result was already dropped', async () => {
+    const seen: Seen[] = [];
+    const output = await compact(transcript(), fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 1,
+      skipCallIds: ['tool-1'],
+    });
+    expect(seen.flatMap((r) => r.questions)).not.toContain('call_t1');
+    expect(seen.flatMap((r) => r.questions)).not.toContain('result_t1');
+    expect(output.stats).toMatchObject({ calls: 3, skipped: 1, deferred: 0 });
+    expect(output.decisions.map((d) => d.id)).toEqual(['t2', 't3']);
+  });
+
+  it('reports calls the state had no room for and keeps them unanswered', async () => {
+    const messages = [message('user', 'start')];
+    for (let i = 0; i < 60; i += 1) {
+      messages.push(call(`c${i}`, 'Read', { file_path: `/repo/${i}.ts` }, 'x'), result(`c${i}`, 'x'));
+    }
+    const seen: Seen[] = [];
+    const decided = await decide(messages, fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 0,
+      maxStateTokens: 400,
+    });
+    expect(decided.stats.stateStage).toBe('window trimmed');
+    expect(decided.stats.deferred).toBeGreaterThan(0);
+    expect(decided.decisions).toHaveLength(
+      decided.stats.calls - decided.stats.deferred,
+    );
+    expect(seen.flatMap((r) => r.questions)).toHaveLength(
+      decided.decisions.length * 2,
     );
   });
 });

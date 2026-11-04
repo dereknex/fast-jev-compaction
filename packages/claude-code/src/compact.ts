@@ -79,14 +79,16 @@ export const QUESTION_RESERVE_TOKENS = QUESTION_TOKENS_PER_CALL * MAX_CALLS_PER_
 
 /**
  * Caps the configured budgets at the model's input window. Every request
- * re-sends the whole state, so the state has to fit with room for a full batch
- * of questions; otherwise the backend rejects the request (Clef answers HTTP
- * 422) and no compaction ever happens. A model with no known window keeps the
- * configured budgets.
+ * re-sends the whole state, so the state has to fit with the questions of this
+ * run; otherwise the backend rejects the request (Clef answers HTTP 422) and no
+ * compaction ever happens. `candidates` is how many calls are asked about, so a
+ * short transcript does not pay for a full batch. A model with no known window
+ * keeps the configured budgets.
  */
 export function clampToContextWindow(
   options: ResolvedCompactOptions,
   contextWindow: number | undefined,
+  candidates: number = MAX_CALLS_PER_BATCH,
 ): ResolvedCompactOptions {
   if (
     typeof contextWindow !== 'number' ||
@@ -95,13 +97,15 @@ export function clampToContextWindow(
   ) {
     return options;
   }
+  const asked = Math.min(Math.max(0, Math.floor(candidates)), MAX_CALLS_PER_BATCH);
   const maxRequestTokens = Math.min(options.maxRequestTokens, contextWindow);
+  const reserve = asked === 0 ? 0 : REQUEST_OVERHEAD_TOKENS + QUESTION_TOKENS_PER_CALL * asked;
   return {
     ...options,
     maxRequestTokens,
     maxStateTokens: Math.min(
       options.maxStateTokens,
-      Math.max(1, maxRequestTokens - QUESTION_RESERVE_TOKENS),
+      Math.max(1, maxRequestTokens - reserve),
     ),
   };
 }
@@ -336,20 +340,52 @@ export async function decide(
 ): Promise<DecisionResult> {
   const started = Date.now();
   const contextWindow = asker.contextWindow;
-  const resolved = clampToContextWindow(resolveOptions(options), contextWindow);
   const windowField = contextWindow === undefined ? {} : { contextWindow };
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
-  const candidates = calls.filter((call) => !call.pinned);
+  const configured = resolveOptions(options);
+  const calls = collectToolCalls(messages, configured.preserveRecentMessages);
+  const idOf = (call: ToolCall): string => call.toolCallId ?? call.tool_use_id;
+  const skippedIds = new Set(options.skipCallIds ?? []);
+  const askable = calls.filter(
+    (call) => !call.pinned && !skippedIds.has(idOf(call)),
+  );
+  const skipped = calls.filter((call) => !call.pinned).length - askable.length;
+  const resolved = clampToContextWindow(configured, contextWindow, askable.length);
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
   let batches: ToolCall[][] = [];
+  const deferred = new Set<ToolCall>();
   const answers = new Map<string, CallAnswer>();
-  if (candidates.length > 0) {
+  if (askable.length > 0) {
     signal?.throwIfAborted();
     onProgress?.({ stage: 'fitting', ...windowField });
+    if (typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0) {
+      // Long tool names can make even one question pair exceed the per-call estimate.
+      const largestQuestion = askable.reduce(
+        (largest, call) => Math.max(largest, estimateTokens(JSON.stringify(questionsFor(call)))),
+        0,
+      );
+      resolved.maxStateTokens = Math.min(
+        resolved.maxStateTokens,
+        Math.max(1, resolved.maxRequestTokens - REQUEST_OVERHEAD_TOKENS - largestQuestion),
+      );
+    }
     const state = fitState(messages, calls, resolved);
     fitted = state;
-    const progress = { stateTokens: state.tokens, stateStage: state.stage, ...windowField };
+    const omitted = new Set(state.omitted ?? []);
+    const candidates = askable.filter(
+      (call) => !omitted.has(call.callIndex) && !omitted.has(call.resultIndex),
+    );
+    if (candidates.length < askable.length) {
+      const judged = new Set(candidates);
+      for (const call of askable) if (!judged.has(call)) deferred.add(call);
+    }
+    const progress = {
+      stateTokens: state.tokens,
+      stateStage: state.stage,
+      deferred: deferred.size,
+      skipped,
+      ...windowField,
+    };
     onProgress?.({ stage: 'batching', ...progress });
     batches = batchCalls(candidates, state.tokens, resolved);
     onProgress?.({ stage: 'requesting', ...progress, batches: batches.length });
@@ -365,11 +401,18 @@ export async function decide(
     stateTokens: fitted.tokens,
     stateStage: fitted.stage,
     batches: batches.length,
+    deferred: deferred.size,
+    skipped,
     ...windowField,
   });
-  const decisions = calls.map((call) =>
-    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
-  );
+  const decisions = calls
+    .filter(
+      (call) =>
+        call.pinned || (!skippedIds.has(idOf(call)) && !deferred.has(call)),
+    )
+    .map((call) =>
+      decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
+    );
 
   return {
     decisions,
@@ -380,6 +423,8 @@ export async function decide(
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
       pinned: count(decisions, 'pinned'),
+      deferred: deferred.size,
+      skipped,
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
       requests: batches.length,

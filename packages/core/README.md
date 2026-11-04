@@ -4,7 +4,7 @@ Continuous, verbatim context compaction engine for LLM agents using TypeSafe's J
 
 This package provides the core algorithms and clients with zero heavy dependencies:
 - State extraction, fitting, and token estimation (`fitState`, `collectToolCalls`, `estimateTokens`)
-- Non-summarizing verbatim pruning logic (`decide`, `compact`, `applyDecisions`)
+- Non-summarizing verbatim pruning logic (`decide`, `compact`, `applyDecisions`); pass `skipCallIds` to reuse decisions you already applied
 - Dual-provider client (`JevClient`) supporting both TypeSafe System One API and Cloudflare Workers AI Clef
 
 ## Installation
